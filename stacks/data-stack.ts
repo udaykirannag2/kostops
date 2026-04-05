@@ -4,6 +4,7 @@ import * as glue    from 'aws-cdk-lib/aws-glue';
 import * as ddb     from 'aws-cdk-lib/aws-dynamodb';
 import * as iam     from 'aws-cdk-lib/aws-iam';
 import * as s3      from 'aws-cdk-lib/aws-s3';
+import * as cr      from 'aws-cdk-lib/custom-resources';
 import { Construct } from 'constructs';
 
 interface DataStackProps extends cdk.StackProps {
@@ -133,31 +134,24 @@ export class DataStack extends cdk.Stack {
     //   s3://<payer-cur-bucket>/<report-prefix>/<report-name>/
     //     data/BILLING_PERIOD=YYYY-MM/<uuid>.parquet
     //
-    // The crawler auto-discovers the schema and creates/updates the 'cur' table
-    // in the kostops_cur Glue database. Run it once after the first CUR delivery
-    // (Day 2, ~24h after enabling CUR export in AWS Billing console).
-    //
-    // Schedule: on-demand only (run manually after each month's CUR update).
-    // To trigger: AWS Console → Glue → Crawlers → kostops-cur-crawler → Run
-    // Or CLI: aws glue start-crawler --name kostops-cur-crawler
-    new glue.CfnCrawler(this, 'KostOpsCurCrawler', {
+    // Schedule: runs daily at 06:00 UTC so schema/partitions stay in sync
+    // with new CUR deliveries without any manual steps.
+    // Also triggered once immediately at deploy time (see CrawlerBootstrap below).
+    const crawler = new glue.CfnCrawler(this, 'KostOpsCurCrawler', {
       name:         'kostops-cur-crawler',
       role:         crawlerRole.roleArn,
       databaseName: 'kostops_cur',
       description:  'Crawls payer CUR parquet data cross-account and updates kostops_cur Glue table',
+      // Run every day at 06:00 UTC — keeps partitions fresh after CUR delivery
+      schedule: { scheduleExpression: 'cron(0 6 * * ? *)' },
       targets: {
         s3Targets: [{
-          // Crawl the entire payer CUR bucket — Glue will find the parquet
-          // files regardless of the report prefix chosen during CUR setup.
           path: `s3://${props.payerCurBucketName}/`,
-          // Exclude Athena metadata files written by previous query runs
           exclusions: ['athena-query-results/**', '*.json', '*.yml', '*.yaml'],
         }],
       },
       schemaChangePolicy: {
-        // Update table schema when new columns appear (CUR adds columns over time)
         updateBehavior: 'UPDATE_IN_DATABASE',
-        // Do not delete tables if S3 data is temporarily missing
         deleteBehavior: 'LOG',
       },
       configuration: JSON.stringify({
@@ -166,11 +160,35 @@ export class DataStack extends cdk.Stack {
           Partitions: { AddOrUpdateBehavior: 'InheritFromTable' },
           Tables:     { AddOrUpdateBehavior: 'MergeNewColumns' },
         },
-        // Group all parquet files under a single 'cur' table rather than
-        // creating one table per S3 prefix
         Grouping: { TableGroupingPolicy: 'CombineCompatibleSchemas' },
       }),
     });
+
+    // ── 3c. Kick off the crawler immediately at deploy time ───────────────────
+    // Customers should not need to run any manual CLI commands after deploy.
+    // This custom resource starts the crawler once so that Athena queries work
+    // as soon as CUR data already exists in the bucket (which it almost always
+    // does for existing payer accounts). If the bucket is empty the crawler
+    // completes in seconds with no tables created — harmless.
+    const crawlerBootstrap = new cr.AwsCustomResource(this, 'CrawlerBootstrap', {
+      resourceType: 'Custom::GlueCrawlerStart',
+      onCreate: {
+        service:    'Glue',
+        action:     'startCrawler',
+        parameters: { Name: 'kostops-cur-crawler' },
+        physicalResourceId: cr.PhysicalResourceId.of('kostops-cur-crawler-bootstrap'),
+        // Ignore AlreadyRunningException — crawler may already be running
+        ignoreErrorCodesMatching: 'CrawlerRunningException',
+      },
+      policy: cr.AwsCustomResourcePolicy.fromStatements([
+        new iam.PolicyStatement({
+          actions:   ['glue:StartCrawler'],
+          resources: [`arn:aws:glue:${this.region}:${this.account}:crawler/kostops-cur-crawler`],
+        }),
+      ]),
+    });
+    // Must wait for the crawler resource to exist before starting it
+    crawlerBootstrap.node.addDependency(crawler);
 
     // ── 4. DynamoDB findings table ────────────────────────────────────────────
     // Stores savings opportunities (findings) surfaced by the agent.
@@ -239,7 +257,7 @@ export class DataStack extends cdk.Stack {
     });
     new cdk.CfnOutput(this, 'GlueCrawlerName', {
       value:       'kostops-cur-crawler',
-      description: 'Run after first CUR delivery: aws glue start-crawler --name kostops-cur-crawler',
+      description: 'Runs automatically daily at 06:00 UTC. Started once at deploy time.',
     });
   }
 }

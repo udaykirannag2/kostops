@@ -107,18 +107,7 @@ cdk deploy --all \
 python scripts/deploy_agent.py
 ```
 
-### Step 3 — Run the Glue crawler
-
-After the first CUR delivery arrives in your payer CUR bucket (typically within
-24 hours of enabling CUR exports), run the Glue crawler once to register the table
-schema in the Glue Data Catalog:
-
-```bash
-aws glue start-crawler --name kostops-cur-crawler --profile my-linked-account
-# Wait ~2-5 minutes for the crawler to finish, then Athena queries will work
-```
-
-### Step 4 — Open the UI
+### Step 3 — Open the UI
 
 CDK outputs the URL at the end of deploy:
 
