@@ -15,17 +15,17 @@ const env = {
 };
 
 // Customer-supplied parameters
-const curBucketName            = app.node.tryGetContext('curBucketName')            ?? '';
+const payerCurBucketName       = app.node.tryGetContext('payerCurBucketName')       ?? '';
 const slackWebhookUrl          = app.node.tryGetContext('slackWebhookUrl')          ?? '';
 const adminEmail               = app.node.tryGetContext('adminEmail')               ?? '';
 const payerAccountId           = app.node.tryGetContext('payerAccountId')           ?? '';
 const payerCrossAccountRoleArn = app.node.tryGetContext('payerCrossAccountRoleArn') ?? '';
 
 // Validate required payer context
-if (!payerAccountId || !payerCrossAccountRoleArn) {
+if (!payerAccountId || !payerCrossAccountRoleArn || !payerCurBucketName) {
   console.warn(
-    '\n[KostOps] WARNING: payerAccountId or payerCrossAccountRoleArn not set.\n' +
-    'Cost Explorer and billing MCP server will not work without payer account access.\n' +
+    '\n[KostOps] WARNING: payerAccountId, payerCrossAccountRoleArn, or payerCurBucketName not set.\n' +
+    'Cost Explorer, billing MCP server, and Athena CUR queries will not work.\n' +
     'Run the payer stack first: see cdk/payer-app.ts\n'
   );
 }
@@ -34,16 +34,20 @@ if (!payerAccountId || !payerCrossAccountRoleArn) {
 const authStack = new AuthStack(app, 'KostOpsAuthStack', { env, adminEmail });
 
 // 2 — Data (S3, Athena, DynamoDB — no dependencies)
-const dataStack = new DataStack(app, 'KostOpsDataStack', { env, curBucketName });
+const dataStack = new DataStack(app, 'KostOpsDataStack', {
+  env,
+  payerCurBucketName,
+  payerAccountId,
+});
 
 // 3 — Agent (AgentCore Runtime + IAM with MCP server permissions)
 const agentStack = new AgentStack(app, 'KostOpsAgentStack', {
   env,
   findingsTable:             dataStack.findingsTable,
-  curBucket:                 dataStack.curBucket,
+  payerCurBucketName,
   athenaResultsBucketName:   dataStack.athenaResultsBucketName,
-  payerAccountId:            payerAccountId,
-  payerCrossAccountRoleArn:  payerCrossAccountRoleArn,
+  payerAccountId,
+  payerCrossAccountRoleArn,
 });
 agentStack.addDependency(authStack);
 agentStack.addDependency(dataStack);

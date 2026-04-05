@@ -141,6 +141,21 @@ export class ApiStack extends cdk.Stack {
       logRetention:  logs.RetentionDays.TWO_WEEKS,
     });
 
+    // ── API Gateway account-level CloudWatch Logs role ────────────────────────
+    // Required once per account for API Gateway to write access logs to CW.
+    const apiGwLogsRole = new iam.Role(this, 'ApiGatewayCloudWatchRole', {
+      roleName:    'kostops-apigateway-cloudwatch-role',
+      assumedBy:   new iam.ServicePrincipal('apigateway.amazonaws.com'),
+      managedPolicies: [
+        iam.ManagedPolicy.fromAwsManagedPolicyName(
+          'service-role/AmazonAPIGatewayPushToCloudWatchLogs',
+        ),
+      ],
+    });
+    const cfnAccount = new apigateway.CfnAccount(this, 'ApiGatewayAccount', {
+      cloudWatchRoleArn: apiGwLogsRole.roleArn,
+    });
+
     // ── API Gateway ───────────────────────────────────────────────────────────
     const api = new apigateway.RestApi(this, 'KostOpsApi', {
       restApiName:   'kostops-api',
@@ -231,6 +246,9 @@ export class ApiStack extends cdk.Stack {
       new apigateway.LambdaIntegration(dashboardHandler, { proxy: true }),
       authOptions,
     );
+
+    // Ensure API stage is created after the account-level CW Logs role is set
+    api.node.addDependency(cfnAccount);
 
     this.apiUrl = api.url;
 

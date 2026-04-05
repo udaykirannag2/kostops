@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { } from 'react';
 import { BrowserRouter, Routes, Route, NavLink, Navigate } from 'react-router-dom';
 import { MessageSquare, AlertTriangle, LogOut, TrendingDown, LayoutDashboard } from 'lucide-react';
 import type { AuthUser } from 'aws-amplify/auth';

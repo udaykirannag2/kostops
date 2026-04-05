@@ -1,13 +1,14 @@
 import * as cdk     from 'aws-cdk-lib';
-import * as s3      from 'aws-cdk-lib/aws-s3';
 import * as athena  from 'aws-cdk-lib/aws-athena';
 import * as glue    from 'aws-cdk-lib/aws-glue';
 import * as ddb     from 'aws-cdk-lib/aws-dynamodb';
 import * as iam     from 'aws-cdk-lib/aws-iam';
+import * as s3      from 'aws-cdk-lib/aws-s3';
 import { Construct } from 'constructs';
 
 interface DataStackProps extends cdk.StackProps {
-  curBucketName: string; // Name of the replicated CUR bucket created by PayerStack
+  payerCurBucketName: string; // Name of the existing CUR bucket in the payer account
+  payerAccountId:     string; // Payer account ID (12-digit)
 }
 
 /**
@@ -16,8 +17,6 @@ interface DataStackProps extends cdk.StackProps {
  * Provisions all storage and query infrastructure:
  *
  *   S3
- *     curBucket          — imported reference to the replicated CUR bucket
- *                          (created by KostOpsPayerStack, not owned here)
  *     athenaResultsBucket — where Athena writes query output files
  *
  *   Athena
@@ -26,8 +25,8 @@ interface DataStackProps extends cdk.StackProps {
  *
  *   Glue
  *     kostops_cur        — database that Athena uses to find the CUR table
- *                          The actual table/partitions are created by a Glue
- *                          Crawler (or manually) after the first CUR delivery.
+ *                          The Glue Crawler reads the payer CUR bucket directly
+ *                          via cross-account S3 bucket policy (no replication).
  *
  *   DynamoDB
  *     kostops-findings   — stores savings opportunities surfaced by the agent
@@ -35,9 +34,6 @@ interface DataStackProps extends cdk.StackProps {
  *                          GSI on status so the UI can filter OPEN findings
  */
 export class DataStack extends cdk.Stack {
-  /** Reference to the CUR bucket — passed to AgentStack for read permissions */
-  public readonly curBucket: s3.IBucket;
-
   /** Findings table — passed to AgentStack (read/write) and ApiStack (read) */
   public readonly findingsTable: ddb.Table;
 
@@ -47,15 +43,7 @@ export class DataStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: DataStackProps) {
     super(scope, id, props);
 
-    // ── 1. CUR bucket (imported, not created here) ────────────────────────────
-    // This bucket was created by KostOpsPayerStack with the name
-    // kostops-cur-<linkedAccountId>. We import it so we can grant
-    // the agent role read access in AgentStack.
-    this.curBucket = props.curBucketName
-      ? s3.Bucket.fromBucketName(this, 'CurBucket', props.curBucketName)
-      : s3.Bucket.fromBucketName(this, 'CurBucket', 'kostops-cur-placeholder');
-
-    // ── 2. Athena results bucket ──────────────────────────────────────────────
+    // ── 1. Athena results bucket ──────────────────────────────────────────────
     // Athena writes query output here. Separate from the CUR bucket so we
     // can apply a short lifecycle (7 days) without touching billing data.
     const athenaResultsBucket = new s3.Bucket(this, 'AthenaResultsBucket', {
@@ -73,7 +61,7 @@ export class DataStack extends cdk.Stack {
 
     this.athenaResultsBucketName = athenaResultsBucket.bucketName;
 
-    // ── 3. Athena workgroup ───────────────────────────────────────────────────
+    // ── 2. Athena workgroup ───────────────────────────────────────────────────
     // Isolated workgroup for KostOps queries.
     // enforceWorkGroupConfiguration = true means queries cannot override
     // the result location or the data-scanned limit.
@@ -96,44 +84,53 @@ export class DataStack extends cdk.Stack {
       },
     });
 
-    // ── 4. Glue database for CUR ──────────────────────────────────────────────
+    // ── 3. Glue database for CUR ──────────────────────────────────────────────
     // Athena uses Glue Data Catalog to find tables.
-    // The database is created here; the CUR table schema and partitions are
-    // populated by the Glue Crawler below after the first CUR delivery lands
-    // in the replicated bucket (kostops-cur-<linkedAccountId>).
+    // The database points at the payer CUR bucket in the payer account.
+    // The CUR table schema and partitions are populated by the Glue Crawler
+    // below after the first CUR delivery lands in the payer bucket.
     new glue.CfnDatabase(this, 'KostOpsCurDatabase', {
       catalogId:           this.account,
       databaseInput: {
         name:        'kostops_cur',
         description: 'KostOps Cost and Usage Report database',
-        locationUri: `s3://${this.curBucket.bucketName}/`,
+        locationUri: `s3://${props.payerCurBucketName}/`,
       },
     });
 
-    // ── 4a. Glue crawler IAM role ─────────────────────────────────────────────
-    // The crawler runs in the LINKED account and reads the replicated CUR
-    // bucket (kostops-cur-<linkedAccountId>). It needs:
-    //   - S3 read on the replicated CUR bucket
+    // ── 3a. Glue crawler IAM role ─────────────────────────────────────────────
+    // The crawler runs in the LINKED account and reads the payer CUR bucket
+    // directly via cross-account S3 bucket policy (set by KostOpsPayerStack).
+    // It needs:
+    //   - S3 read on the payer CUR bucket (cross-account)
     //   - Glue permissions to create/update tables in kostops_cur database
     const crawlerRole = new iam.Role(this, 'GlueCrawlerRole', {
       roleName:    'kostops-glue-crawler-role',
       assumedBy:   new iam.ServicePrincipal('glue.amazonaws.com'),
-      description: 'Role for KostOps Glue crawler to read replicated CUR data',
+      description: 'Role for KostOps Glue crawler to read payer CUR data cross-account',
       managedPolicies: [
         // Gives Glue the baseline CloudWatch logs + Glue Data Catalog permissions
         iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSGlueServiceRole'),
       ],
     });
 
-    // Read access to the replicated CUR bucket in this linked account.
-    // Note: the bucket was created by KostOpsPayerStack in the payer account
-    // and data is replicated here — the crawler only ever touches this copy.
-    this.curBucket.grantRead(crawlerRole);
+    // Cross-account read access to the payer CUR bucket.
+    // The payer account's S3 bucket policy (set by KostOpsPayerStack) allows
+    // this linked account to read from the bucket. This policy grants the
+    // Glue service role the IAM side of the cross-account permission.
+    crawlerRole.addToPolicy(new iam.PolicyStatement({
+      sid:     'ReadPayerCurBucket',
+      actions: ['s3:GetObject', 's3:ListBucket', 's3:GetBucketLocation'],
+      resources: [
+        `arn:aws:s3:::${props.payerCurBucketName}`,
+        `arn:aws:s3:::${props.payerCurBucketName}/*`,
+      ],
+    }));
 
-    // ── 4b. Glue crawler ──────────────────────────────────────────────────────
-    // Points at the root of the replicated CUR bucket and crawls all prefixes.
+    // ── 3b. Glue crawler ──────────────────────────────────────────────────────
+    // Points at the root of the payer CUR bucket and crawls all prefixes.
     // AWS CUR with Athena integration stores data in parquet with the structure:
-    //   s3://kostops-cur-<accountId>/<report-prefix>/<report-name>/
+    //   s3://<payer-cur-bucket>/<report-prefix>/<report-name>/
     //     data/BILLING_PERIOD=YYYY-MM/<uuid>.parquet
     //
     // The crawler auto-discovers the schema and creates/updates the 'cur' table
@@ -147,12 +144,12 @@ export class DataStack extends cdk.Stack {
       name:         'kostops-cur-crawler',
       role:         crawlerRole.roleArn,
       databaseName: 'kostops_cur',
-      description:  'Crawls replicated CUR parquet data and updates kostops_cur Glue table',
+      description:  'Crawls payer CUR parquet data cross-account and updates kostops_cur Glue table',
       targets: {
         s3Targets: [{
-          // Crawl the entire replicated CUR bucket — Glue will find the parquet
+          // Crawl the entire payer CUR bucket — Glue will find the parquet
           // files regardless of the report prefix chosen during CUR setup.
-          path: `s3://${this.curBucket.bucketName}/`,
+          path: `s3://${props.payerCurBucketName}/`,
           // Exclude Athena metadata files written by previous query runs
           exclusions: ['athena-query-results/**', '*.json', '*.yml', '*.yaml'],
         }],
@@ -175,7 +172,7 @@ export class DataStack extends cdk.Stack {
       }),
     });
 
-    // ── 5. DynamoDB findings table ────────────────────────────────────────────
+    // ── 4. DynamoDB findings table ────────────────────────────────────────────
     // Stores savings opportunities (findings) surfaced by the agent.
     //
     // Access patterns:

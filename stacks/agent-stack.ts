@@ -1,13 +1,12 @@
 import * as cdk from 'aws-cdk-lib';
 import * as iam  from 'aws-cdk-lib/aws-iam';
-import * as s3   from 'aws-cdk-lib/aws-s3';
 import * as ddb  from 'aws-cdk-lib/aws-dynamodb';
 import * as ssm  from 'aws-cdk-lib/aws-ssm';
 import { Construct } from 'constructs';
 
 interface AgentStackProps extends cdk.StackProps {
   findingsTable:              ddb.Table;
-  curBucket:                  s3.IBucket;
+  payerCurBucketName:         string;   // Payer CUR bucket name (cross-account read)
   athenaResultsBucketName:    string;
   payerAccountId:             string;   // Payer account ID for cross-account trust
   payerCrossAccountRoleArn:   string;   // ARN of kostops-cross-account-role in payer
@@ -129,8 +128,17 @@ export class AgentStack extends cdk.Stack {
       resources: ['*'],
     }));
 
-    // S3: read CUR data + write Athena query results
-    props.curBucket.grantRead(agentRole);
+    // S3: cross-account read of payer CUR bucket + write Athena query results
+    // The payer bucket policy (set by KostOpsPayerStack) allows this account.
+    // This policy grants the IAM side of the cross-account permission.
+    agentRole.addToPolicy(new iam.PolicyStatement({
+      sid:     'ReadPayerCurBucket',
+      actions: ['s3:GetObject', 's3:ListBucket', 's3:GetBucketLocation'],
+      resources: [
+        `arn:aws:s3:::${props.payerCurBucketName}`,
+        `arn:aws:s3:::${props.payerCurBucketName}/*`,
+      ],
+    }));
     agentRole.addToPolicy(new iam.PolicyStatement({
       sid: 'AthenaResultsBucket',
       actions: ['s3:GetObject', 's3:PutObject', 's3:DeleteObject'],
@@ -174,7 +182,7 @@ export class AgentStack extends cdk.Stack {
       mcpConfigPath: 'mcp/agent_mcp_config.json',
       environmentVariables: {
         FINDINGS_TABLE:            props.findingsTable.tableName,
-        CUR_BUCKET:                props.curBucket.bucketName,
+        CUR_BUCKET:                props.payerCurBucketName,
         ATHENA_WORKGROUP:          'kostops-workgroup',
         GLUE_DATABASE:             'kostops_cur',
         CUR_TABLE:                 'cur',

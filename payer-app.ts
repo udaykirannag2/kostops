@@ -12,12 +12,11 @@
  *
  * Requirements before running:
  *   - AWS CLI configured with payer account credentials
- *   - CUR already enabled in the payer account with S3 delivery
- *   - Versioning enabled on the source CUR bucket (required for S3 replication)
+ *   - CUR already enabled in the payer account with S3 delivery (Parquet + Athena format)
  *
  * What this creates:
- *   - S3 bucket: kostops-cur-<linkedAccountId>  (standardised, easy to identify)
- *   - S3 replication: payer CUR bucket → kostops-cur-<linkedAccountId>
+ *   - S3 bucket policy on the existing CUR bucket granting the linked account read access
+ *     (no replication — Glue/Athena in the linked account reads the payer bucket directly)
  *   - IAM role: kostops-cross-account-role (trusted by linked account KostOps agent)
  *   - SSM parameters: /kostops/payer/* (read by linked account deploy)
  */
