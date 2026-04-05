@@ -98,9 +98,9 @@ export class DataStack extends cdk.Stack {
 
     // ── 4. Glue database for CUR ──────────────────────────────────────────────
     // Athena uses Glue Data Catalog to find tables.
-    // The database is created here; the CUR table schema is created by a
-    // Glue Crawler (or manually via deploy_agent.py) after the first CUR
-    // delivery lands in the CUR bucket.
+    // The database is created here; the CUR table schema and partitions are
+    // populated by the Glue Crawler below after the first CUR delivery lands
+    // in the replicated bucket (kostops-cur-<linkedAccountId>).
     new glue.CfnDatabase(this, 'KostOpsCurDatabase', {
       catalogId:           this.account,
       databaseInput: {
@@ -108,6 +108,71 @@ export class DataStack extends cdk.Stack {
         description: 'KostOps Cost and Usage Report database',
         locationUri: `s3://${this.curBucket.bucketName}/`,
       },
+    });
+
+    // ── 4a. Glue crawler IAM role ─────────────────────────────────────────────
+    // The crawler runs in the LINKED account and reads the replicated CUR
+    // bucket (kostops-cur-<linkedAccountId>). It needs:
+    //   - S3 read on the replicated CUR bucket
+    //   - Glue permissions to create/update tables in kostops_cur database
+    const crawlerRole = new iam.Role(this, 'GlueCrawlerRole', {
+      roleName:    'kostops-glue-crawler-role',
+      assumedBy:   new iam.ServicePrincipal('glue.amazonaws.com'),
+      description: 'Role for KostOps Glue crawler to read replicated CUR data',
+      managedPolicies: [
+        // Gives Glue the baseline CloudWatch logs + Glue Data Catalog permissions
+        iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSGlueServiceRole'),
+      ],
+    });
+
+    // Read access to the replicated CUR bucket in this linked account.
+    // Note: the bucket was created by KostOpsPayerStack in the payer account
+    // and data is replicated here — the crawler only ever touches this copy.
+    this.curBucket.grantRead(crawlerRole);
+
+    // ── 4b. Glue crawler ──────────────────────────────────────────────────────
+    // Points at the root of the replicated CUR bucket and crawls all prefixes.
+    // AWS CUR with Athena integration stores data in parquet with the structure:
+    //   s3://kostops-cur-<accountId>/<report-prefix>/<report-name>/
+    //     data/BILLING_PERIOD=YYYY-MM/<uuid>.parquet
+    //
+    // The crawler auto-discovers the schema and creates/updates the 'cur' table
+    // in the kostops_cur Glue database. Run it once after the first CUR delivery
+    // (Day 2, ~24h after enabling CUR export in AWS Billing console).
+    //
+    // Schedule: on-demand only (run manually after each month's CUR update).
+    // To trigger: AWS Console → Glue → Crawlers → kostops-cur-crawler → Run
+    // Or CLI: aws glue start-crawler --name kostops-cur-crawler
+    new glue.CfnCrawler(this, 'KostOpsCurCrawler', {
+      name:         'kostops-cur-crawler',
+      role:         crawlerRole.roleArn,
+      databaseName: 'kostops_cur',
+      description:  'Crawls replicated CUR parquet data and updates kostops_cur Glue table',
+      targets: {
+        s3Targets: [{
+          // Crawl the entire replicated CUR bucket — Glue will find the parquet
+          // files regardless of the report prefix chosen during CUR setup.
+          path: `s3://${this.curBucket.bucketName}/`,
+          // Exclude Athena metadata files written by previous query runs
+          exclusions: ['athena-query-results/**', '*.json', '*.yml', '*.yaml'],
+        }],
+      },
+      schemaChangePolicy: {
+        // Update table schema when new columns appear (CUR adds columns over time)
+        updateBehavior: 'UPDATE_IN_DATABASE',
+        // Do not delete tables if S3 data is temporarily missing
+        deleteBehavior: 'LOG',
+      },
+      configuration: JSON.stringify({
+        Version: 1.0,
+        CrawlerOutput: {
+          Partitions: { AddOrUpdateBehavior: 'InheritFromTable' },
+          Tables:     { AddOrUpdateBehavior: 'MergeNewColumns' },
+        },
+        // Group all parquet files under a single 'cur' table rather than
+        // creating one table per S3 prefix
+        Grouping: { TableGroupingPolicy: 'CombineCompatibleSchemas' },
+      }),
     });
 
     // ── 5. DynamoDB findings table ────────────────────────────────────────────
@@ -174,6 +239,10 @@ export class DataStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'GlueDatabaseName', {
       value:       'kostops_cur',
       description: 'Glue database name for Athena CUR queries',
+    });
+    new cdk.CfnOutput(this, 'GlueCrawlerName', {
+      value:       'kostops-cur-crawler',
+      description: 'Run after first CUR delivery: aws glue start-crawler --name kostops-cur-crawler',
     });
   }
 }
