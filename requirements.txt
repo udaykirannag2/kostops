@@ -1,0 +1,15 @@
+# KostOps agent dependencies
+# Install with: pip install -r requirements.txt
+# Or with uv:   uv pip install -r requirements.txt
+
+# AWS Strands Agents SDK — agent loop, tool calling, BedrockModel
+strands-agents>=0.1.0
+
+# Amazon Bedrock AgentCore — runtime wrapper (BedrockAgentCoreApp)
+bedrock-agentcore>=0.1.0
+
+# AWS SDK for Python — Athena, EC2, DynamoDB, STS, CloudWatch
+boto3>=1.38.0
+
+# Type stubs for boto3 (optional but helps with IDE autocompletion)
+boto3-stubs[athena,ec2,dynamodb,sts,cloudwatch]>=1.38.0
