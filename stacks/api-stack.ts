@@ -8,10 +8,12 @@ import * as logs        from 'aws-cdk-lib/aws-logs';
 import { Construct }    from 'constructs';
 
 interface ApiStackProps extends cdk.StackProps {
-  findingsTable:    ddb.Table;
-  agentEndpointUrl: string;
-  userPool:         cognito.UserPool;
-  slackWebhookUrl:  string;
+  findingsTable:         ddb.Table;
+  agentEndpointUrl:      string;
+  userPool:              cognito.UserPool;
+  slackWebhookUrl:       string;
+  athenaWorkgroup:       string;
+  athenaResultsBucketName: string;
 }
 
 /**
@@ -59,12 +61,32 @@ export class ApiStack extends cdk.Stack {
     }));
 
     // ── Common Lambda environment variables ───────────────────────────────────
+    // Athena permissions for dashboard-handler
+    lambdaRole.addToPolicy(new iam.PolicyStatement({
+      sid:     'AthenaDashboard',
+      actions: [
+        'athena:StartQueryExecution',
+        'athena:GetQueryExecution',
+        'athena:GetQueryResults',
+        'glue:GetTable',
+        'glue:GetDatabase',
+        'glue:GetPartitions',
+        's3:GetObject', 's3:PutObject', 's3:DeleteObject',
+        's3:ListBucket',
+      ],
+      resources: ['*'],
+    }));
+
     const commonEnv: Record<string, string> = {
-      FINDINGS_TABLE:     props.findingsTable.tableName,
-      AGENT_ENDPOINT_URL: props.agentEndpointUrl,
-      SLACK_WEBHOOK_URL:  props.slackWebhookUrl,
+      FINDINGS_TABLE:          props.findingsTable.tableName,
+      AGENT_ENDPOINT_URL:      props.agentEndpointUrl,
+      SLACK_WEBHOOK_URL:       props.slackWebhookUrl,
+      ATHENA_WORKGROUP:        props.athenaWorkgroup,
+      ATHENA_RESULTS_BUCKET:   props.athenaResultsBucketName,
+      GLUE_DATABASE:           'kostops_cur',
+      CUR_TABLE:               'cur',
       POWERTOOLS_SERVICE_NAME: 'kostops-api',
-      LOG_LEVEL:          'INFO',
+      LOG_LEVEL:               'INFO',
     };
 
     // ── Lambda: chat-handler ──────────────────────────────────────────────────
@@ -101,6 +123,19 @@ export class ApiStack extends cdk.Stack {
       code:          lambda.Code.fromAsset('lambda'),
       role:          lambdaRole,
       timeout:       cdk.Duration.seconds(60),
+      memorySize:    128,
+      environment:   commonEnv,
+      logRetention:  logs.RetentionDays.TWO_WEEKS,
+    });
+
+    // ── Lambda: dashboard-handler ─────────────────────────────────────────────
+    const dashboardHandler = new lambda.Function(this, 'DashboardHandler', {
+      functionName:  'kostops-dashboard-handler',
+      runtime:       lambda.Runtime.PYTHON_3_12,
+      handler:       'dashboard_handler.handler',
+      code:          lambda.Code.fromAsset('lambda'),
+      role:          lambdaRole,
+      timeout:       cdk.Duration.seconds(120), // Athena queries can take up to 2 min
       memorySize:    128,
       environment:   commonEnv,
       logRetention:  logs.RetentionDays.TWO_WEEKS,
@@ -185,6 +220,15 @@ export class ApiStack extends cdk.Stack {
     digestResource.addMethod(
       'POST',
       new apigateway.LambdaIntegration(slackHandler, { proxy: true }),
+      authOptions,
+    );
+
+    // GET /dashboard/monthly-spend
+    const dashboardResource     = api.root.addResource('dashboard');
+    const monthlySpendResource  = dashboardResource.addResource('monthly-spend');
+    monthlySpendResource.addMethod(
+      'GET',
+      new apigateway.LambdaIntegration(dashboardHandler, { proxy: true }),
       authOptions,
     );
 

@@ -140,39 +140,28 @@ def get_spend_by_account(
 
 
 @tool
-def get_spend_by_tag(
-    start_date: str,
-    end_date: str,
-    tag_key: str,
-    limit: int = 20,
-) -> list[dict]:
+def get_spend_last_13_months() -> list[dict]:
     """
-    Return total spend grouped by a specific resource tag value.
-    Useful for cost allocation by team, environment, or project.
-
-    Args:
-        start_date: Start date in YYYY-MM-DD format (inclusive).
-        end_date:   End date in YYYY-MM-DD format (exclusive).
-        tag_key:    The tag key to group by (e.g. "Environment", "Team", "Project").
-        limit:      Maximum number of tag values to return.
+    Return total spend grouped by calendar month for the last 13 months.
+    13 months gives enough history for year-over-year comparison
+    (e.g. April 2026 vs April 2025).
 
     Returns:
-        List of dicts with keys: tag_value, total_cost, currency.
+        List of dicts with keys: year_month, total_cost, currency,
+        sorted oldest → newest so charts render left-to-right correctly.
     """
-    # CUR stores user tags as resource_tags_user_<key> (lowercase, spaces → underscores)
-    tag_col = f"resource_tags_user_{tag_key.lower().replace(' ', '_').replace('-', '_')}"
     sql = f"""
         SELECT
-            COALESCE("{tag_col}", '(untagged)')  AS tag_value,
-            ROUND(SUM(line_item_unblended_cost), 2) AS total_cost,
-            line_item_currency_code              AS currency
+            DATE_FORMAT(line_item_usage_start_date, '%Y-%m') AS year_month,
+            ROUND(SUM(line_item_unblended_cost), 2)          AS total_cost,
+            line_item_currency_code                          AS currency
         FROM {CUR_TABLE}
-        WHERE line_item_usage_start_date >= TIMESTAMP '{start_date} 00:00:00'
-          AND line_item_usage_start_date <  TIMESTAMP '{end_date} 00:00:00'
+        WHERE line_item_usage_start_date >= DATE_ADD('month', -13, CURRENT_DATE)
           AND line_item_line_item_type NOT IN ('Credit', 'Refund', 'Tax')
-        GROUP BY "{tag_col}", line_item_currency_code
-        ORDER BY total_cost DESC
-        LIMIT {limit}
+        GROUP BY
+            DATE_FORMAT(line_item_usage_start_date, '%Y-%m'),
+            line_item_currency_code
+        ORDER BY year_month ASC
     """
     return _run_query(sql)
 

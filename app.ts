@@ -51,10 +51,12 @@ agentStack.addDependency(dataStack);
 // 4 — API (Lambda + API Gateway)
 const apiStack = new ApiStack(app, 'KostOpsApiStack', {
   env,
-  findingsTable:    dataStack.findingsTable,
-  agentEndpointUrl: agentStack.agentEndpointUrl,
-  userPool:         authStack.userPool,
+  findingsTable:           dataStack.findingsTable,
+  agentEndpointUrl:        agentStack.agentEndpointUrl,
+  userPool:                authStack.userPool,
   slackWebhookUrl,
+  athenaWorkgroup:         'kostops-workgroup',
+  athenaResultsBucketName: dataStack.athenaResultsBucketName,
 });
 apiStack.addDependency(agentStack);
 

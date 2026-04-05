@@ -60,7 +60,7 @@ if not CUR_BUCKET:
 from tools.athena_tools import (
     get_spend_by_service,
     get_spend_by_account,
-    get_spend_by_tag,
+    get_spend_last_13_months,
     get_daily_spend_trend,
     get_top_cost_drivers,
 )
@@ -138,12 +138,11 @@ def main() -> None:
     print_table(rows)
     results['spend_by_account'] = rows
 
-    # ── Tool 3: get_spend_by_tag ──────────────────────────────────────────────
-    header(f"Tool 3 — get_spend_by_tag (tag_key='{args.tag}')")
-    rows = run_tool('get_spend_by_tag', get_spend_by_tag,
-                    args.start, args.end, tag_key=args.tag)
+    # ── Tool 3: get_spend_last_13_months ──────────────────────────────────────
+    header("Tool 3 — get_spend_last_13_months")
+    rows = run_tool('get_spend_last_13_months', get_spend_last_13_months)
     print_table(rows)
-    results['spend_by_tag'] = rows
+    results['spend_last_13_months'] = rows
 
     # ── Tool 4: get_daily_spend_trend ─────────────────────────────────────────
     header("Tool 4 — get_daily_spend_trend")

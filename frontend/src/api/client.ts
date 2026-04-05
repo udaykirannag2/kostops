@@ -100,3 +100,19 @@ export function updateFinding(
 export function triggerSlackDigest(): Promise<{ sent: boolean; findings: number }> {
   return apiFetch('/slack/digest', { method: 'POST' });
 }
+
+// ── Dashboard ─────────────────────────────────────────────────────────────────
+
+export interface MonthlySpend {
+  year_month: string;  // e.g. "2026-03"
+  total_cost: number;
+  currency:   string;
+}
+
+export interface MonthlySpendResponse {
+  monthly_spend: MonthlySpend[];
+}
+
+export function getMonthlySpend(): Promise<MonthlySpendResponse> {
+  return apiFetch<MonthlySpendResponse>('/dashboard/monthly-spend');
+}

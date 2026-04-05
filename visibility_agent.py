@@ -31,7 +31,7 @@ from tools.payer_role import get_payer_credentials, is_configured as payer_confi
 from tools.athena_tools import (
     get_spend_by_service,
     get_spend_by_account,
-    get_spend_by_tag,
+    get_spend_last_13_months,
     get_daily_spend_trend,
     get_top_cost_drivers,
 )
@@ -137,7 +137,7 @@ agent = Agent(
     tools=[
         get_spend_by_service,
         get_spend_by_account,
-        get_spend_by_tag,
+        get_spend_last_13_months,
         get_daily_spend_trend,
         get_top_cost_drivers,
         list_unattached_ebs_volumes,
