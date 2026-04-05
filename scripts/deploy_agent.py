@@ -12,15 +12,15 @@ Usage:
 
 What it does:
   1. Reads agent config from SSM (/kostops/agentcore-config)
-  2. Zips the agents/ directory (visibility_agent.py + tools/ + mcp/)
+  2. Zips the agent code (visibility_agent.py + tools/ + mcp/)
   3. Uploads the zip to S3 (uses the Athena results bucket as staging)
-  4. Creates or updates the AgentCore Runtime deployment
-  5. Waits for the deployment to reach ACTIVE state
-  6. Prints the endpoint URL
+  4. Creates or updates the AgentCore Runtime
+  5. Waits for ACTIVE status
+  6. Updates the chat-handler Lambda env var with the runtime ARN
+  7. Prints the runtime ARN
 
 Requirements:
-  - AWS credentials with bedrock-agentcore:* and s3:PutObject permissions
-  - uv installed (for the MCP server sidecars)
+  - AWS credentials with bedrock-agentcore-control:* and s3:PutObject permissions
   - Run from the repo root directory
 """
 
@@ -33,6 +33,7 @@ import tempfile
 import logging
 import boto3
 import pathlib
+from typing import Optional, Tuple
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 logger = logging.getLogger(__name__)
@@ -41,12 +42,12 @@ AWS_REGION    = os.environ.get('AWS_REGION', 'us-east-1')
 SSM_PARAM     = '/kostops/agentcore-config'
 AGENT_DIR     = pathlib.Path(__file__).parent.parent  # repo root
 
-# Files/dirs to include in the agent zip
 AGENT_SOURCES = ['visibility_agent.py', 'payer_role.py', 'tools/', 'mcp/']
 
-_ssm     = boto3.client('ssm',     region_name=AWS_REGION)
-_s3      = boto3.client('s3',      region_name=AWS_REGION)
-_bedrock = boto3.client('bedrock', region_name=AWS_REGION)
+_ssm   = boto3.client('ssm',                       region_name=AWS_REGION)
+_s3    = boto3.client('s3',                        region_name=AWS_REGION)
+_ctrl  = boto3.client('bedrock-agentcore-control', region_name=AWS_REGION)
+_lam   = boto3.client('lambda',                    region_name=AWS_REGION)
 
 
 # ── Step 1: Read config from SSM ──────────────────────────────────────────────
@@ -62,10 +63,6 @@ def load_agent_config() -> dict:
 # ── Step 2: Zip the agent code ────────────────────────────────────────────────
 
 def zip_agent_code() -> str:
-    """
-    Zip visibility_agent.py, payer_role.py, tools/, and agent_mcp_config.json
-    into a temporary zip file. Returns the path to the zip.
-    """
     tmp      = tempfile.NamedTemporaryFile(suffix='.zip', delete=False)
     zip_path = tmp.name
     tmp.close()
@@ -94,94 +91,137 @@ def zip_agent_code() -> str:
 
 # ── Step 3: Upload zip to S3 ──────────────────────────────────────────────────
 
-def upload_zip(zip_path: str, bucket_name: str, agent_name: str) -> str:
-    """Upload the agent zip to S3 and return the S3 URI."""
+def upload_zip(zip_path: str, bucket_name: str, agent_name: str) -> Tuple[str, str]:
+    """Upload the agent zip to S3. Returns (bucket, s3_key)."""
     s3_key = f"agentcore-deployments/{agent_name}/agent.zip"
     logger.info(f"Uploading zip to s3://{bucket_name}/{s3_key}")
     _s3.upload_file(zip_path, bucket_name, s3_key)
-    s3_uri = f"s3://{bucket_name}/{s3_key}"
-    logger.info(f"Uploaded: {s3_uri}")
-    return s3_uri
+    logger.info(f"Uploaded: s3://{bucket_name}/{s3_key}")
+    return bucket_name, s3_key
 
 
-# ── Step 4: Create or update AgentCore Runtime deployment ─────────────────────
+# ── Step 4: Find existing runtime by name ────────────────────────────────────
 
-def deploy_to_agentcore(config: dict, s3_uri: str) -> str:
+def find_runtime(name: str) -> Optional[dict]:
+    paginator_token = None
+    while True:
+        kwargs = {}
+        if paginator_token:
+            kwargs['nextToken'] = paginator_token
+        resp = _ctrl.list_agent_runtimes(**kwargs)
+        for rt in resp.get('agentRuntimes', []):
+            if rt.get('agentRuntimeName') == name:
+                return rt
+        paginator_token = resp.get('nextToken')
+        if not paginator_token:
+            return None
+
+
+# ── Step 5: Create or update AgentCore Runtime ───────────────────────────────
+
+def deploy_to_agentcore(config: dict, bucket: str, s3_key: str) -> Tuple[str, str]:
     """
-    Create or update the AgentCore Runtime deployment.
-    Returns the endpoint URL.
+    Create or update the AgentCore Runtime.
+    Returns (agentRuntimeId, agentRuntimeArn).
     """
     agent_name = config['agentName']
 
-    deployment_config = {
-        'agentName':   agent_name,
-        'roleArn':     config['roleArn'],
-        'codeSource':  {'s3': {'uri': s3_uri}},
-        'runtime': {
-            'entrypoint':      config['entrypoint'],
-            'memoryMb':        config['memoryMb'],
-            'timeoutSeconds':  config['timeoutSeconds'],
-        },
-        'environmentVariables': config['environmentVariables'],
-        'mcpConfig': {
-            'configPath': config['mcpConfigPath'],
-        },
+    artifact = {
+        'codeConfiguration': {
+            'code': {
+                's3': {
+                    'bucket': bucket,
+                    'prefix': s3_key,
+                }
+            },
+            'runtime':    'PYTHON_3_12',
+            'entryPoint': ['visibility_agent.py'],
+        }
     }
 
-    # Check if deployment already exists
-    try:
-        existing = _bedrock.get_agent_runtime(agentName=agent_name)
-        logger.info(f"Updating existing AgentCore deployment: {agent_name}")
-        response = _bedrock.update_agent_runtime(
-            agentName=agent_name,
-            **{k: v for k, v in deployment_config.items() if k != 'agentName'},
+    network = {'networkMode': 'PUBLIC'}
+
+    lifecycle = {
+        'idleRuntimeSessionTimeout': 300,   # 5 min idle before session cleanup
+        'maxLifetime':               3600,  # max 1 hour session lifetime
+    }
+
+    existing = find_runtime(agent_name)
+
+    if existing:
+        runtime_id = existing['agentRuntimeId']
+        logger.info(f"Updating existing AgentCore Runtime: {agent_name} ({runtime_id})")
+        resp = _ctrl.update_agent_runtime(
+            agentRuntimeId=        runtime_id,
+            agentRuntimeArtifact=  artifact,
+            roleArn=               config['roleArn'],
+            networkConfiguration=  network,
+            lifecycleConfiguration=lifecycle,
+            environmentVariables=  config['environmentVariables'],
         )
-    except _bedrock.exceptions.ResourceNotFoundException:
-        logger.info(f"Creating new AgentCore deployment: {agent_name}")
-        response = _bedrock.create_agent_runtime(**deployment_config)
+        return resp['agentRuntimeId'], resp['agentRuntimeArn']
+    else:
+        logger.info(f"Creating new AgentCore Runtime: {agent_name}")
+        resp = _ctrl.create_agent_runtime(
+            agentRuntimeName=      agent_name,
+            agentRuntimeArtifact=  artifact,
+            roleArn=               config['roleArn'],
+            networkConfiguration=  network,
+            lifecycleConfiguration=lifecycle,
+            environmentVariables=  config['environmentVariables'],
+        )
+        return resp['agentRuntimeId'], resp['agentRuntimeArn']
 
-    return response.get('endpointUrl', '')
 
+# ── Step 6: Wait for ACTIVE ───────────────────────────────────────────────────
 
-# ── Step 5: Wait for ACTIVE state ─────────────────────────────────────────────
-
-def wait_for_active(agent_name: str, timeout_seconds: int = 300) -> str:
-    """Poll AgentCore until the deployment is ACTIVE. Returns endpoint URL."""
-    logger.info(f"Waiting for {agent_name} to become ACTIVE...")
+def wait_for_active(runtime_id: str, timeout_seconds: int = 600) -> None:
+    logger.info(f"Waiting for runtime {runtime_id} to become ACTIVE...")
     deadline = time.time() + timeout_seconds
 
     while time.time() < deadline:
-        response    = _bedrock.get_agent_runtime(agentName=agent_name)
-        status      = response.get('status', '')
-        endpoint    = response.get('endpointUrl', '')
-
+        resp   = _ctrl.get_agent_runtime(agentRuntimeId=runtime_id)
+        status = resp.get('status', '')
         logger.info(f"  Status: {status}")
 
-        if status == 'ACTIVE':
-            logger.info(f"Deployment ACTIVE: {endpoint}")
-            return endpoint
+        if status in ('ACTIVE', 'READY'):
+            logger.info(f"Runtime is {status} (operational)")
+            return
 
-        if status in ('FAILED', 'ERROR'):
-            reason = response.get('failureReason', 'unknown')
-            raise RuntimeError(f"AgentCore deployment failed: {reason}")
+        if status in ('FAILED', 'CREATE_FAILED', 'UPDATE_FAILED'):
+            reason = resp.get('failureReason', 'unknown')
+            raise RuntimeError(f"AgentCore Runtime failed: {reason}")
 
         time.sleep(15)
 
-    raise TimeoutError(f"AgentCore deployment did not become ACTIVE within {timeout_seconds}s")
+    raise TimeoutError(f"Runtime did not become ACTIVE within {timeout_seconds}s")
 
 
-# ── Step 6: Update SSM with final endpoint URL ────────────────────────────────
+# ── Step 7: Save ARN to SSM + update Lambda env var ──────────────────────────
 
-def update_endpoint_ssm(endpoint_url: str) -> None:
-    """Store the final endpoint URL in SSM so other stacks can read it."""
+def update_references(runtime_arn: str) -> None:
+    """Store runtime ARN in SSM and update the chat-handler Lambda env var."""
     _ssm.put_parameter(
-        Name='/kostops/agent-endpoint-url',
-        Value=endpoint_url,
+        Name='/kostops/agent-runtime-arn',
+        Value=runtime_arn,
         Type='String',
         Overwrite=True,
-        Description='KostOps AgentCore Runtime endpoint URL',
+        Description='KostOps AgentCore Runtime ARN',
     )
-    logger.info(f"Endpoint URL saved to SSM: /kostops/agent-endpoint-url")
+    logger.info("Runtime ARN saved to SSM: /kostops/agent-runtime-arn")
+
+    # Update the chat-handler Lambda so it uses the real ARN right away
+    try:
+        lam_resp = _lam.get_function_configuration(FunctionName='kostops-chat-handler')
+        current_env = lam_resp.get('Environment', {}).get('Variables', {})
+        current_env['AGENT_RUNTIME_ARN'] = runtime_arn
+        _lam.update_function_configuration(
+            FunctionName='kostops-chat-handler',
+            Environment={'Variables': current_env},
+        )
+        logger.info("chat-handler Lambda env var AGENT_RUNTIME_ARN updated")
+    except Exception as e:
+        logger.warning(f"Could not update Lambda env var (non-fatal): {e}")
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -189,24 +229,22 @@ def update_endpoint_ssm(endpoint_url: str) -> None:
 def main() -> None:
     logger.info("=== KostOps AgentCore Deployment ===")
 
-    config   = load_agent_config()
-    zip_path = zip_agent_code()
-
-    # Use the Athena results bucket as staging — it already exists and the
-    # agent role has write access to it
-    athena_bucket = f"kostops-athena-results-{boto3.client('sts').get_caller_identity()['Account']}"
+    config       = load_agent_config()
+    zip_path     = zip_agent_code()
+    account_id   = boto3.client('sts', region_name=AWS_REGION).get_caller_identity()['Account']
+    athena_bucket = f"kostops-athena-results-{account_id}"
 
     try:
-        s3_uri       = upload_zip(zip_path, athena_bucket, config['agentName'])
-        endpoint_url = deploy_to_agentcore(config, s3_uri)
-        endpoint_url = wait_for_active(config['agentName'])
-        update_endpoint_ssm(endpoint_url)
+        bucket, s3_key   = upload_zip(zip_path, athena_bucket, config['agentName'])
+        runtime_id, arn  = deploy_to_agentcore(config, bucket, s3_key)
+        wait_for_active(runtime_id)
+        update_references(arn)
     finally:
         os.unlink(zip_path)
 
     print("\n" + "=" * 60)
     print(f"  KostOps agent deployed successfully!")
-    print(f"  Endpoint: {endpoint_url}")
+    print(f"  Runtime ARN: {arn}")
     print("=" * 60 + "\n")
     print("Next step: open the CloudFront URL from CDK outputs and log in.")
 

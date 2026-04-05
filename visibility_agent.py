@@ -156,12 +156,19 @@ app = BedrockAgentCoreApp(
 )
 
 if __name__ == "__main__":
-    print("KostOps running locally. Type 'exit' to quit.\n")
-    if not payer_configured():
-        print("WARNING: Payer role not configured — Cost Explorer data will be limited.\n")
-    while True:
-        user_input = input("You: ").strip()
-        if user_input.lower() in ("exit", "quit"):
-            break
-        response = agent(user_input)
-        print(f"\nKostOps: {response}\n")
+    # AgentCore Runtime executes this file directly — app.run() starts the
+    # HTTP server that AgentCore calls via invoke_agent_runtime.
+    # When running locally, fall back to a simple REPL for testing.
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == '--local':
+        print("KostOps running locally. Type 'exit' to quit.\n")
+        if not payer_configured():
+            print("WARNING: Payer role not configured — Cost Explorer data will be limited.\n")
+        while True:
+            user_input = input("You: ").strip()
+            if user_input.lower() in ("exit", "quit"):
+                break
+            response = agent(user_input)
+            print(f"\nKostOps: {response}\n")
+    else:
+        app.run()

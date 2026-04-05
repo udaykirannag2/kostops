@@ -53,10 +53,10 @@ export class ApiStack extends cdk.Stack {
     // DynamoDB access for findings-handler and slack-handler
     props.findingsTable.grantReadWriteData(lambdaRole);
 
-    // Invoke AgentCore endpoint for chat-handler
+    // Invoke AgentCore Runtime for chat-handler
     lambdaRole.addToPolicy(new iam.PolicyStatement({
-      sid:       'InvokeAgentCore',
-      actions:   ['bedrock:InvokeAgent', 'bedrock:InvokeAgentAlias'],
+      sid:       'InvokeAgentCoreRuntime',
+      actions:   ['bedrock-agentcore:InvokeAgentRuntime'],
       resources: ['*'],
     }));
 

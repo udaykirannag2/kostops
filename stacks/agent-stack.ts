@@ -41,11 +41,14 @@ export class AgentStack extends cdk.Stack {
     // ── IAM Role for KostOps Agent ────────────────────────────────────────────
     const agentRole = new iam.Role(this, 'KostOpsAgentRole', {
       roleName: 'kostops-agent-role',
-      assumedBy: new iam.ServicePrincipal('bedrock.amazonaws.com'),
+      assumedBy: new iam.CompositePrincipal(
+        new iam.ServicePrincipal('bedrock.amazonaws.com'),
+        new iam.ServicePrincipal('bedrock-agentcore.amazonaws.com'),
+      ),
       description: 'Least-privilege role for KostOps Strands agent on AgentCore Runtime',
     });
 
-    // Bedrock: invoke Claude models only
+    // Bedrock: invoke Claude models
     agentRole.addToPolicy(new iam.PolicyStatement({
       sid: 'BedrockInvoke',
       actions: [
@@ -55,6 +58,26 @@ export class AgentStack extends cdk.Stack {
       resources: [
         `arn:aws:bedrock:${this.region}::foundation-model/anthropic.claude-*`,
       ],
+    }));
+
+    // AgentCore control plane: deploy_agent.py creates/updates the runtime
+    agentRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'AgentCoreControl',
+      actions: [
+        'bedrock-agentcore-control:CreateAgentRuntime',
+        'bedrock-agentcore-control:UpdateAgentRuntime',
+        'bedrock-agentcore-control:GetAgentRuntime',
+        'bedrock-agentcore-control:ListAgentRuntimes',
+        'bedrock-agentcore-control:DeleteAgentRuntime',
+      ],
+      resources: ['*'],
+    }));
+
+    // Lambda: deploy_agent.py updates the chat-handler env var with the runtime ARN
+    agentRole.addToPolicy(new iam.PolicyStatement({
+      sid:     'UpdateChatHandlerConfig',
+      actions: ['lambda:GetFunctionConfiguration', 'lambda:UpdateFunctionConfiguration'],
+      resources: [`arn:aws:lambda:${this.region}:${this.account}:function:kostops-chat-handler`],
     }));
 
     // STS: assume payer cross-account role for Cost Explorer + billing MCP server
@@ -173,7 +196,7 @@ export class AgentStack extends cdk.Stack {
     // We store the config in SSM and the deploy_agent.py script reads it
     // to create/update the AgentCore Runtime deployment.
     const agentConfig = {
-      agentName: 'kostops-visibility-agent',
+      agentName: 'kostopsVisibilityAgent',
       roleArn: agentRole.roleArn,
       codeZipPath: '../agents/',
       entrypoint: 'visibility_agent.app',
