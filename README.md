@@ -35,6 +35,33 @@ Cost Optimization Hub               Lambda + API Gateway
 - CUR already enabled in your payer account (Billing → Cost & Usage Reports)
 - Versioning enabled on your existing CUR S3 bucket (required for replication)
 
+#### IAM permissions required
+
+The AWS credentials used to run each CDK deploy must have sufficient permissions.
+The simplest approach is `AdministratorAccess` on both accounts. If your organisation
+requires least-privilege, the minimum permissions are:
+
+**Payer account** (Step 1 — `KostOpsPayerStack`):
+- `s3:CreateBucket`, `s3:PutBucketVersioning`, `s3:PutBucketPolicy`, `s3:PutLifecycleConfiguration`, `s3:PutReplicationConfiguration`
+- `iam:CreateRole`, `iam:PutRolePolicy`, `iam:AttachRolePolicy`, `iam:PassRole`
+- `ssm:PutParameter`
+- `cloudformation:*` (CDK requires full CloudFormation access)
+- `sts:GetCallerIdentity` (CDK bootstrap)
+
+**Linked account** (Step 2 — `cdk deploy --all`):
+- `cognito-idp:CreateUserPool`, `cognito-idp:CreateUserPoolClient`
+- `s3:CreateBucket`, `s3:PutBucketPolicy`
+- `athena:CreateWorkGroup`, `glue:CreateDatabase`, `glue:CreateTable`
+- `dynamodb:CreateTable`
+- `iam:CreateRole`, `iam:PutRolePolicy`, `iam:AttachRolePolicy`, `iam:PassRole`
+- `bedrock:*` (AgentCore Runtime provisioning)
+- `lambda:CreateFunction`, `lambda:AddPermission`
+- `apigateway:*`
+- `cloudfront:CreateDistribution`, `cloudfront:CreateOriginAccessControl`
+- `ssm:PutParameter`, `ssm:GetParameter`
+- `cloudformation:*`
+- `sts:GetCallerIdentity`
+
 ### Step 1 — Run once in your payer account (~5 minutes)
 
 ```bash
