@@ -1,0 +1,28 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    font-family: 'Inter', system-ui, sans-serif;
+  }
+
+  /* Amplify Authenticator overrides — match KostOps brand */
+  [data-amplify-authenticator] {
+    --amplify-colors-brand-primary-60:  #0284c7;
+    --amplify-colors-brand-primary-80:  #0369a1;
+    --amplify-colors-brand-primary-100: #0c4a6e;
+    --amplify-components-authenticator-container-width-max: 420px;
+  }
+}
+
+@layer utilities {
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: #e2e8f0 transparent;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar       { width: 6px; }
+  .scrollbar-thin::-webkit-scrollbar-track  { background: transparent; }
+  .scrollbar-thin::-webkit-scrollbar-thumb  { background: #e2e8f0; border-radius: 3px; }
+}
