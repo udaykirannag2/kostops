@@ -15,7 +15,7 @@ Two credential contexts:
     - Billing MCP server (Cost Explorer, Compute Optimizer, Budgets)
     - All consolidated billing data only exists in payer
 
-MCP servers wired via AgentCore Gateway (agents/mcp/agent_mcp_config.json):
+MCP servers wired via AgentCore Gateway (mcp/agent_mcp_config.json):
   billing     → payer credentials injected at startup via payer_role.py
   cloudwatch  → linked account credentials (inherited)
   aws-knowledge → public remote, no credentials

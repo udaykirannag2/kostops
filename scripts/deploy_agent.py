@@ -42,7 +42,7 @@ SSM_PARAM     = '/kostops/agentcore-config'
 AGENT_DIR     = pathlib.Path(__file__).parent.parent  # repo root
 
 # Files/dirs to include in the agent zip
-AGENT_SOURCES = ['visibility_agent.py', 'payer_role.py', 'tools/', 'agent_mcp_config.json']
+AGENT_SOURCES = ['visibility_agent.py', 'payer_role.py', 'tools/', 'mcp/']
 
 _ssm     = boto3.client('ssm',     region_name=AWS_REGION)
 _s3      = boto3.client('s3',      region_name=AWS_REGION)

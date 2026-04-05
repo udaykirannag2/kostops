@@ -176,6 +176,8 @@ export class AgentStack extends cdk.Stack {
         FINDINGS_TABLE:            props.findingsTable.tableName,
         CUR_BUCKET:                props.curBucket.bucketName,
         ATHENA_WORKGROUP:          'kostops-workgroup',
+        GLUE_DATABASE:             'kostops_cur',
+        CUR_TABLE:                 'cur',
         BEDROCK_MODEL_ID:          'anthropic.claude-3-5-sonnet-20241022-v2:0',
         PAYER_ACCOUNT_ID:          props.payerAccountId,
         PAYER_CROSS_ACCOUNT_ROLE:  props.payerCrossAccountRoleArn,
