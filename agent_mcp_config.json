@@ -1,0 +1,63 @@
+{
+  "mcpServers": {
+    "billing": {
+      "description": "AWS Billing and Cost Management — Cost Explorer, Compute Optimizer, Budgets, Anomalies, Cost Optimization Hub. Runs with PAYER account credentials injected at runtime via sts:AssumeRole.",
+      "command": "uvx",
+      "args": ["awslabs.billing-cost-management-mcp-server@latest"],
+      "env": {
+        "FASTMCP_LOG_LEVEL": "ERROR",
+        "AWS_REGION": "${AWS_REGION}",
+        "__COMMENT__": "AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN are injected at runtime by visibility_agent.py using payer_role.get_payer_credentials(). Do not set them here."
+      },
+      "tools": [
+        "get_cost_and_usage",
+        "get_cost_forecast",
+        "get_cost_comparison",
+        "get_anomalies",
+        "describe_anomaly_monitors",
+        "get_rightsizing_recommendations",
+        "get_savings_plans_purchase_recommendation",
+        "get_budget_list",
+        "get_budget_performance",
+        "get_cost_optimization_hub_recommendations",
+        "get_today_date",
+        "get_dimension_values",
+        "get_tag_values"
+      ]
+    },
+    "cloudwatch": {
+      "description": "Amazon CloudWatch — metrics and alarms for EC2 CPU utilization and idle detection. Runs with LINKED account credentials (no cross-account needed — CloudWatch is local).",
+      "command": "uvx",
+      "args": ["awslabs.cloudwatch-mcp-server@latest"],
+      "env": {
+        "FASTMCP_LOG_LEVEL": "ERROR",
+        "AWS_REGION": "${AWS_REGION}"
+      },
+      "tools": [
+        "get_metric_data",
+        "get_metric_statistics",
+        "list_metrics",
+        "describe_alarms"
+      ]
+    },
+    "aws-knowledge": {
+      "description": "AWS Knowledge — live AWS documentation for agent reasoning. Public remote endpoint, no credentials needed.",
+      "type": "remote",
+      "url": "https://knowledge-mcp.global.api.aws",
+      "tools": [
+        "search_documentation",
+        "get_api_reference"
+      ]
+    }
+  },
+  "credential_injection": {
+    "billing": "payer_role — see agents/tools/payer_role.py",
+    "cloudwatch": "linked account agent role — inherited from AgentCore Runtime",
+    "aws-knowledge": "none — public endpoint"
+  },
+  "notes": {
+    "why_payer_creds_for_billing": "Cost Explorer, Compute Optimizer, Budgets, and Cost Optimization Hub only return consolidated data when called from the payer (management) account. The billing MCP server must run with payer account credentials obtained via sts:AssumeRole.",
+    "why_linked_creds_for_cloudwatch": "CloudWatch metrics (EC2 CPU etc.) live in the linked account where the resources are. No cross-account role needed.",
+    "cost_warning": "Cost Explorer API = $0.01/call. Agent is instructed to batch queries and never repeat identical calls. Results cached in DynamoDB with 1-hour TTL."
+  }
+}
