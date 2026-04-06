@@ -327,7 +327,6 @@ export class DataStack extends cdk.Stack {
       encryption:   ddb.TableEncryption.AWS_MANAGED,
       timeToLiveAttribute: 'ttl',
       removalPolicy: cdk.RemovalPolicy.DESTROY,  // conversations are ephemeral
-      autoDeleteObjects: false,
     });
 
     // ── Outputs ───────────────────────────────────────────────────────────────

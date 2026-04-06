@@ -54,10 +54,6 @@ interface SlackConfig {
   notifications: { dailyDigest: boolean; anomalyAlert: boolean; newFinding: boolean };
 }
 
-interface SlackSecrets {
-  webhookUrl:     string;
-  signingSecret:  string;
-}
 
 function SlackPanel({
   integration,
@@ -349,7 +345,7 @@ function IntegrationCard({
           )}
         </div>
         <p className="text-xs text-gray-500 mt-0.5 leading-relaxed">{integration.description}</p>
-        {integration.connected && integration.config?.channel && (
+        {integration.connected && !!integration.config?.channel && (
           <p className="text-xs text-gray-400 mt-1">
             → {String(integration.config.channel)}
           </p>

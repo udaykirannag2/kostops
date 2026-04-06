@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { Send, Bot, User, Loader2, Sparkles, RotateCcw } from 'lucide-react';
 import clsx from 'clsx';
-import { sendMessage, getChatSession } from '../api/client';
+import { sendMessage, getChatSession, listChatSessions } from '../api/client';
 
 // ── LocalStorage — only persists the sessionId (a lightweight UUID string).
 // Full message history is stored in DynamoDB and fetched on mount.
@@ -46,18 +46,17 @@ export default function Chat() {
   const inputRef   = useRef<HTMLTextAreaElement>(null);
 
   // ── Load history from DynamoDB on mount ────────────────────────────────────
-  // If localStorage holds a sessionId we fetched before, reload its messages
-  // from the API. On 404 (session expired/deleted) we silently start fresh.
+  // Strategy:
+  //   1. Try the sessionId stored in localStorage (happy path — fast)
+  //   2. If that 404s (old/pre-persistence session), fall back to the most
+  //      recent session from the list API so the user never sees an empty chat
+  //      even after the first deploy of this feature
+  //   3. If no sessions at all, show the empty state
   useEffect(() => {
     const storedId = loadSessionId();
-    if (!storedId) {
-      setHistoryLoading(false);
-      return;
-    }
 
-    setSessionId(storedId);
-    getChatSession(storedId)
-      .then(session => {
+    const loadSession = (sessionId: string) =>
+      getChatSession(sessionId).then(session => {
         const rehydrated: Message[] = session.messages.map(m => ({
           id:        crypto.randomUUID(),
           role:      m.role,
@@ -65,19 +64,37 @@ export default function Chat() {
           timestamp: new Date(m.timestamp),
         }));
         setMessages(rehydrated);
-      })
-      .catch(err => {
-        // 404 = session gone; any other error — start fresh silently
-        if (!err.message?.includes('404')) {
-          console.warn('Could not load chat history:', err.message);
+        setSessionId(sessionId);
+        saveSessionId(sessionId);
+      });
+
+    const tryStoredThenFallback = async () => {
+      // Try stored sessionId first
+      if (storedId) {
+        try {
+          await loadSession(storedId);
+          return;
+        } catch {
+          // stored session gone — fall through to list lookup
+          clearSessionId();
         }
-        clearSessionId();
-        setSessionId(null);
-      })
-      .finally(() => setHistoryLoading(false));
+      }
+
+      // Fall back: load the most recent session from DynamoDB
+      try {
+        const { sessions } = await listChatSessions();
+        if (sessions.length > 0) {
+          await loadSession(sessions[0].sessionId);
+        }
+      } catch (err) {
+        console.warn('Could not load chat history:', err);
+      }
+    };
+
+    tryStoredThenFallback().finally(() => setHistoryLoading(false));
   }, []);  // runs once on mount
 
-  // Persist sessionId to localStorage whenever it changes
+  // Persist sessionId to localStorage whenever it changes after a new message
   useEffect(() => {
     if (sessionId) saveSessionId(sessionId);
   }, [sessionId]);
