@@ -313,9 +313,24 @@ See CONTRIBUTING.md for how to add a new detection rule.
 
 ## Roadmap
 
-### V2 — Multi-Agent + Cost Transparency
+### What's Built (V1 — Current)
 
-#### Proactive Daily Scan — Always-Populated Dashboard (CRITICAL)
+| Area | Feature | Status |
+|---|---|---|
+| **Infrastructure** | Auth (Cognito), Data (DynamoDB, Athena, Glue), Agent (AgentCore Runtime), API (Lambda + API Gateway), Frontend (S3 + CloudFront) | ✅ |
+| **Agent** | Pure Python stdlib HTTP server, `boto3.converse()` loop, 24 tools (Cost Explorer, EC2, RDS, EBS, Savings Plans, Budgets, Findings CRUD, Athena CUR) | ✅ |
+| **Chat** | Full agent chat UI, session persistence (DynamoDB), history reloads on refresh / device switch, "New chat" button | ✅ |
+| **Dashboard** | Monthly spend bar chart (Athena CUR) | ✅ |
+| **Findings** | List, filter by status, resolve / ignore actions | ✅ |
+| **Slack** | Outbound Block Kit daily digest (Mon–Fri 9am UTC), inbound slash command handler (3s ACK + async), HMAC-SHA256 verification | ✅ |
+| **Integrations page** | Card grid with slide-over config panels — Slack (full), Jira / PagerDuty / Email (stubs) | ✅ |
+| **Keep-warm** | EventBridge ping every 5 min to avoid AgentCore cold-start | ✅ |
+
+---
+
+### Phase 2 — Proactive Intelligence + Governance
+
+#### Proactive Daily Scan — Always-Populated Findings (CRITICAL)
 
 **Current gap:** Findings only appear in DynamoDB when a user explicitly asks the
 agent in chat. On first open, the UI dashboard is blank. Customers expect to see
@@ -446,22 +461,147 @@ sharing, Findings for tracking what you're actually working on.
 
 ---
 
-### V3 — Reporting + Enterprise
+#### KostOps Cost Dashboard — Infrastructure Self-Cost via Tags
 
-#### Weekly Report
-Automated weekly summary delivered to Slack and surfaced in the UI:
-- **New findings this week** — what the agent discovered (type, resource, estimated savings)
-- **Actions taken** — findings that moved from OPEN → RESOLVED this week
-- **Savings realised** — sum of `estimatedMonthlySavings` for RESOLVED findings
-- **Still open** — backlog ranked by savings, with age (days since created)
-- **ROI line** — "This week: found $X in savings, resolved $Y, KostOps cost $Z"
+Show customers exactly what KostOps itself costs to run, building trust and enabling
+direct ROI comparison ("KostOps cost $42 this month, identified $1,400 in savings").
 
-Implementation notes:
-- Add `resolvedAt` timestamp to findings when status → RESOLVED (findings_handler.py PATCH)
-- New `lambda/weekly_report.py`: queries DynamoDB for findings created or resolved in last 7 days, formats report, sends to Slack
-- EventBridge Scheduler: Mondays 08:00 UTC → weekly_report Lambda
-- API route `POST /reports/weekly` for on-demand trigger from the UI
-- Store each report as a DynamoDB item in `kostops-reports` table for historical viewing
+**How it works:**
+- CDK tags every KostOps resource at deploy time: `App=KostOps`, `Component=ui|api|agent|storage|data`
+- New Athena tool `get_kostops_monthly_cost()` queries CUR filtering on `resource_tags_user_app = 'KostOps'`
+- Results grouped by service and component; cached in S3 by Athena (no extra storage cost)
+
+**Where it surfaces:**
+- **Dashboard** — new "KostOps Overhead" card: this month $X, breakdown by component
+- **Header badge** — "KostOps infra: ~$X/mo" with tooltip
+- **ROI callout** — "KostOps cost $42, enabled $1,400/month in identified savings (33x ROI)"
+
+**Implementation:**
+- `app.ts`: add `cdk.Tags.of(app).add('App', 'KostOps')` + per-stack component tags
+- `lambda/dashboard_handler.py`: new `/dashboard/self-cost` route
+- UI: new card in Dashboard with sparkline (last 3 months) + component breakdown bar
+
+---
+
+#### Slack Alerts — Daily and Weekly Reports
+
+Extend the existing Slack integration with richer scheduled reports beyond the current
+daily findings digest.
+
+**Daily alert (enhance existing):**
+- Current: plain findings count + savings total
+- Enhanced: top 3 new findings with resource ID, type, and savings; anomaly callout if cost spike detected overnight; link to findings page
+
+**Weekly report (new — Mondays 08:00 UTC):**
+- New findings this week (count + total estimated savings)
+- Findings resolved this week + savings realised
+- Backlog summary: N open findings, $X total opportunity
+- ROI line: "KostOps cost $Z this month, identified $Y in savings"
+- Sent to Slack + available on demand via `POST /reports/weekly` from the UI
+
+**Implementation:**
+- `lambda/slack_handler.py`: upgrade daily digest to Block Kit with top-3 findings
+- New `lambda/weekly_report.py`: queries findings DynamoDB for last 7 days, formats Block Kit report, sends to Slack
+- `stacks/api-stack.ts`: new EventBridge rule — Mondays 08:00 UTC → weekly_report Lambda
+- New API route: `POST /reports/weekly` for on-demand trigger from Integrations page
+- `lambda/findings_handler.py`: add `resolvedAt` timestamp on PATCH to RESOLVED
+
+---
+
+#### Metabase — Self-Hosted BI Dashboarding
+
+Install Metabase alongside KostOps for customers who want flexible, SQL-driven
+dashboards and reports beyond the built-in React UI.
+
+**Why Metabase:**
+- Connects directly to Athena (CUR data) and DynamoDB (findings) — no data movement
+- Non-engineers can build their own cost dashboards without writing code
+- Pre-built KostOps question library: spend by service, account, tag, savings trend
+- Embeddable charts — findings/cost charts can be embedded in internal wikis or Notion
+
+**Architecture:**
+```
+Metabase (ECS Fargate, t3.small)
+  ├── Athena driver  → kostops_cur Glue database (CUR queries)
+  └── RDS PostgreSQL (t3.micro) → Metabase internal metadata store
+```
+
+**Pre-built dashboards shipped with KostOps:**
+- Monthly spend by service (last 13 months)
+- Top cost drivers by account
+- Findings backlog — open vs resolved over time
+- Savings realised trend
+- KostOps self-cost vs savings ROI
+
+**Implementation:**
+- New `stacks/metabase-stack.ts`: ECS Fargate service + RDS PostgreSQL + ALB
+- Metabase bootstrapped with Athena connection pre-configured via API at deploy time
+- CDK context flag `--context installMetabase=true` — opt-in, not deployed by default
+- Estimated cost: ~$35/month (Fargate t3.small + RDS t3.micro)
+
+---
+
+#### AI Governance — Guardrails, Topic Control, and Security
+
+Apply AWS Bedrock Guardrails to the KostOps agent to enforce safe, on-topic behaviour
+and protect against prompt injection and misuse.
+
+**Reference:** [AWS Cloud Intelligence Dashboards — Generative AI guidance](https://docs.aws.amazon.com/guidance/latest/cloud-intelligence-dashboards/generative-ai.html)
+
+**What guardrails enforce:**
+
+| Control | What it does |
+|---|---|
+| **Topic inclusion** | Agent only answers AWS cost and FinOps questions — refuses off-topic requests ("write me a poem", "ignore previous instructions") |
+| **Topic exclusion** | Blocks specific topics: no investment advice, no competitor pricing, no personally identifiable data |
+| **Cost overrun alerts** | If agent's suggested action would cost more than a configurable threshold, require explicit user confirmation before proceeding |
+| **Prompt injection protection** | Detects and blocks attempts to override the system prompt or extract internal instructions via user messages or tool outputs |
+| **Content filters** | Block hate speech, violence, or inappropriate content in both inputs and outputs |
+| **PII redaction** | Automatically redact PII (account numbers, email addresses) from agent responses before they reach the UI |
+
+**Security — Prompt Injection:**
+Prompt injection is the #1 security risk for LLM agents. An attacker could embed
+instructions in a resource name, tag value, or Slack message that the agent reads
+via a tool call — causing it to exfiltrate data or take unintended actions.
+
+Mitigations:
+- **Bedrock Guardrails** — `applyGuardrail` on every `converse()` call; blocks known injection patterns
+- **Tool output sanitisation** — `visibility_agent.py` strips `<`, `>`, instruction-like patterns from tool results before feeding back to the model
+- **Least-privilege IAM** — agent role has no write access to production resources; remediation requires a separate approved role
+- **Audit log** — every tool call and its inputs/outputs logged to CloudWatch with the userId for forensic review
+
+**Implementation:**
+- `stacks/agent-stack.ts`: create `CfnGuardrail` with topic policy, content filters, PII config
+- Pass `guardrailIdentifier` + `guardrailVersion` to `visibility_agent.py` via env vars
+- `visibility_agent.py`: add `guardrailConfig` to every `boto3.converse()` call
+- New `lambda/audit_log_handler.py`: streams CloudWatch agent logs → S3 for long-term retention
+- UI: **Settings → Governance** page — configure allowed topics, blocked topics, cost threshold, view audit log
+
+---
+
+### Phase 3 — Multi-Agent + Enterprise
+
+#### Multi-Agent Architecture (Super Agent + Sub-Agents)
+Replace the single visibility agent with a **supervisor + specialist** model:
+
+```
+User
+ └── Super Agent  (orchestrator — routes, synthesises, owns the session)
+       ├── Visibility Agent   — spend analysis, trends, anomalies, CUR/Athena
+       ├── Optimization Agent — savings recommendations, rightsizing, idle resources
+       └── Remediation Agent  — executes approved fixes, tracks changes, rollback
+```
+
+- **Super Agent** receives every user message, decides which sub-agent(s) to invoke,
+  aggregates their responses, and returns a single coherent answer.
+- **Visibility Agent** (extracted from current): Cost Explorer, CUR/Athena, CloudWatch metrics.
+- **Optimization Agent** (new): Compute Optimizer, rightsizing, Savings Plans, idle resource ranking.
+- **Remediation Agent** (new): Executes safe remediations (stop instance, delete snapshot, resize)
+  behind a human-approval gate. Every action logged to DynamoDB with before/after state for rollback.
+
+Each sub-agent deploys as its own **AgentCore Runtime** (independent scaling, separate least-privilege IAM).
+
+---
 
 #### Recommendations History and Trend — Hybrid S3 + Athena Approach
 
