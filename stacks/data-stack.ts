@@ -3,6 +3,8 @@ import * as athena  from 'aws-cdk-lib/aws-athena';
 import * as glue    from 'aws-cdk-lib/aws-glue';
 import * as ddb     from 'aws-cdk-lib/aws-dynamodb';
 import * as iam     from 'aws-cdk-lib/aws-iam';
+import * as lambda  from 'aws-cdk-lib/aws-lambda';
+import * as logs    from 'aws-cdk-lib/aws-logs';
 import * as s3      from 'aws-cdk-lib/aws-s3';
 import * as cr      from 'aws-cdk-lib/custom-resources';
 import { Construct } from 'constructs';
@@ -85,6 +87,47 @@ export class DataStack extends cdk.Stack {
       },
     });
 
+    // ── 2b. Auto-detect CUR parquet prefix ───────────────────────────────────
+    // Every customer's CUR bucket has a different prefix structure depending on
+    // what they named their report and when they set it up. Rather than asking
+    // the customer to find and pass the prefix manually, we scan the bucket for
+    // the distinctive 'BILLING_PERIOD=YYYY-MM/' Hive partition pattern that AWS
+    // always uses for CUR Athena-compatible exports — and extract the prefix
+    // automatically. This Lambda runs once at deploy time (CREATE) and on
+    // subsequent deploys (UPDATE) to pick up any prefix changes.
+    const detectorFn = new lambda.Function(this, 'CurPrefixDetector', {
+      functionName:  'kostops-cur-prefix-detector',
+      runtime:       lambda.Runtime.PYTHON_3_12,
+      handler:       'cur_prefix_detector.handler',
+      code:          lambda.Code.fromAsset('lambda'),
+      timeout:       cdk.Duration.seconds(60),
+      memorySize:    128,
+      logRetention:  logs.RetentionDays.ONE_WEEK,
+    });
+
+    // Allow the Lambda to list objects in the payer CUR bucket cross-account.
+    // The payer stack already added an S3 bucket policy allowing this linked
+    // account (root) to call s3:ListBucket — this IAM policy is the other half.
+    detectorFn.addToRolePolicy(new iam.PolicyStatement({
+      sid:     'ListPayerCurBucket',
+      actions: ['s3:ListBucket'],
+      resources: [`arn:aws:s3:::${props.payerCurBucketName}`],
+    }));
+
+    // CDK Provider wires the Lambda into CloudFormation custom resource protocol
+    const detectorProvider = new cr.Provider(this, 'CurPrefixProvider', {
+      onEventHandler: detectorFn,
+    });
+
+    const prefixDetection = new cdk.CustomResource(this, 'CurPrefixDetection', {
+      serviceToken: detectorProvider.serviceToken,
+      properties: { CurBucketName: props.payerCurBucketName },
+    });
+
+    // The detected prefix, e.g. "costreports/CUR/data/"
+    // Used below for both the Glue database locationUri and the crawler path.
+    const curDataPrefix = prefixDetection.getAttString('CurDataPrefix');
+
     // ── 3. Glue database for CUR ──────────────────────────────────────────────
     // Athena uses Glue Data Catalog to find tables.
     // The database points at the payer CUR bucket in the payer account.
@@ -95,7 +138,7 @@ export class DataStack extends cdk.Stack {
       databaseInput: {
         name:        'kostops_cur',
         description: 'KostOps Cost and Usage Report database',
-        locationUri: `s3://${props.payerCurBucketName}/`,
+        locationUri: `s3://${props.payerCurBucketName}/${curDataPrefix}`,
       },
     });
 
@@ -146,8 +189,11 @@ export class DataStack extends cdk.Stack {
       schedule: { scheduleExpression: 'cron(0 6 * * ? *)' },
       targets: {
         s3Targets: [{
-          path: `s3://${props.payerCurBucketName}/`,
-          exclusions: ['athena-query-results/**', '*.json', '*.yml', '*.yaml'],
+          // Prefix auto-detected by CurPrefixDetector Lambda at deploy time.
+          // Targets only the BILLING_PERIOD= Hive partition directory so the
+          // crawler never picks up CSV exports, manifests, or Athena result files.
+          path: `s3://${props.payerCurBucketName}/${curDataPrefix}`,
+          exclusions: [],
         }],
       },
       schemaChangePolicy: {

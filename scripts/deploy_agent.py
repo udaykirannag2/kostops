@@ -1,27 +1,23 @@
 #!/usr/bin/env python3
 """
-deploy_agent.py
----------------
-Packages the KostOps Strands agent and deploys it to Bedrock AgentCore Runtime.
+deploy_agent.py  — MANUAL FALLBACK ONLY
+-----------------------------------------
+Normally you do NOT need to run this script.
+`cdk deploy --all` handles agent deployment automatically via the
+KostOpsAgentStack Custom Resource (lambda/agentcore_deploy.py).
 
-Run this AFTER `cdk deploy --all` because it reads configuration that CDK
-stored in SSM Parameter Store (/kostops/agentcore-config).
+Use this script only when:
+  • You want to re-deploy the agent without a full CDK deploy
+  • You are debugging AgentCore Runtime issues outside of CDK
+  • CDK Custom Resource failed and you need to recover manually
 
 Usage:
     python scripts/deploy_agent.py
 
-What it does:
-  1. Reads agent config from SSM (/kostops/agentcore-config)
-  2. Zips the agent code (visibility_agent.py + tools/ + mcp/)
-  3. Uploads the zip to S3 (uses the Athena results bucket as staging)
-  4. Creates or updates the AgentCore Runtime
-  5. Waits for ACTIVE status
-  6. Updates the chat-handler Lambda env var with the runtime ARN
-  7. Prints the runtime ARN
-
-Requirements:
-  - AWS credentials with bedrock-agentcore-control:* and s3:PutObject permissions
-  - Run from the repo root directory
+Pre-requisites:
+  • `cdk deploy --all` has been run at least once (SSM config must exist)
+  • AWS credentials with bedrock-agentcore-control:* and s3:PutObject permissions
+  • Run from the repo root directory
 """
 
 import os
@@ -31,6 +27,8 @@ import time
 import zipfile
 import tempfile
 import logging
+import subprocess
+import shutil
 import boto3
 import pathlib
 from typing import Optional, Tuple
@@ -42,7 +40,13 @@ AWS_REGION    = os.environ.get('AWS_REGION', 'us-east-1')
 SSM_PARAM     = '/kostops/agentcore-config'
 AGENT_DIR     = pathlib.Path(__file__).parent.parent  # repo root
 
-AGENT_SOURCES = ['visibility_agent.py', 'payer_role.py', 'tools/', 'mcp/']
+AGENT_SOURCES = [
+    'visibility_agent.py',
+    'payer_role.py',
+    'tools/',
+    'mcp/',
+    'strands/',   # lightweight stub — replaces strands-agents (eliminates pydantic_core Rust .so)
+]
 
 _ssm   = boto3.client('ssm',                       region_name=AWS_REGION)
 _s3    = boto3.client('s3',                        region_name=AWS_REGION)
@@ -60,33 +64,103 @@ def load_agent_config() -> dict:
     return config
 
 
-# ── Step 2: Zip the agent code ────────────────────────────────────────────────
+# ── Step 2: Zip the agent code (with bundled dependencies) ───────────────────
 
 def zip_agent_code() -> str:
-    tmp      = tempfile.NamedTemporaryFile(suffix='.zip', delete=False)
-    zip_path = tmp.name
-    tmp.close()
+    """
+    Build a self-contained zip:
+      1. pip-install strands-agents + bedrock-agentcore into a temp build dir
+         using Linux/Python-3.12 compatible wheels (so they run inside AgentCore)
+      2. Copy the agent source files on top
+      3. Zip the whole build dir
+    """
+    build_dir = tempfile.mkdtemp(prefix='kostops-agent-build-')
+    try:
+        logger.info(f"Installing agent dependencies to {build_dir} ...")
+        # Install boto3 only — pure Python, no Rust .so, no platform concerns.
+        #
+        # WHY NOT bedrock-agentcore?
+        #   bedrock-agentcore → pydantic → pydantic_core (4.1 MB ARM64 Rust .so)
+        #   dlopen() of pydantic_core in AgentCore cold containers exceeds the
+        #   30-second initialization timeout on every invocation.
+        #
+        # SOLUTION: replaced BedrockAgentCoreApp with stdlib http.server (see
+        #   visibility_agent.py). This starts in < 100ms with zero .so files.
+        #   boto3 (pure Python) is still needed for Bedrock converse() + tools.
+        #
+        # boto3 is pure Python (no binary wheels) so --platform / --only-binary
+        # are not needed. AgentCore Runtime Python 3.12 does NOT pre-install it.
+        subprocess.check_call([
+            sys.executable, '-m', 'pip', 'install',
+            '--target', build_dir,
+            '--quiet',
+            'boto3',
+        ])
+        logger.info("Dependencies installed")
 
-    logger.info(f"Zipping agent code to {zip_path}")
+        # We ship boto3 + all its pure-Python deps in the zip.
+        # AgentCore Runtime does NOT pre-install boto3 (it's not Lambda).
+        # Nothing needs to be removed — all installed packages are required.
+        # (Previously we removed boto3/botocore here when using bedrock-agentcore,
+        #  assuming they were pre-installed like in Lambda. That assumption was wrong.)
+        RUNTIME_PROVIDED: list = []
+        removed_mb = 0.0
+        for pkg in RUNTIME_PROVIDED:
+            for candidate in [pkg, pkg.replace('-', '_')]:
+                for entry in [
+                    os.path.join(build_dir, candidate),
+                    # also .dist-info dirs like botocore-1.x.x.dist-info
+                ]:
+                    if os.path.isdir(entry):
+                        size = sum(
+                            os.path.getsize(os.path.join(r, f))
+                            for r, _, files in os.walk(entry) for f in files
+                        ) / (1024 * 1024)
+                        shutil.rmtree(entry)
+                        removed_mb += size
+                        logger.info(f"  - removed pre-installed pkg: {candidate} ({size:.1f} MB)")
 
-    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+        if removed_mb > 0:
+            logger.info(f"Removed {removed_mb:.1f} MB of packages")
+
+        # Copy agent source files on top of the installed packages
         for source in AGENT_SOURCES:
             source_path = AGENT_DIR / source
             if source_path.is_file():
-                zf.write(source_path, source)
+                dest = os.path.join(build_dir, source)
+                shutil.copy2(str(source_path), dest)
                 logger.info(f"  + {source}")
             elif source_path.is_dir():
-                for file in source_path.rglob('*'):
-                    if file.is_file() and '__pycache__' not in str(file):
-                        arcname = str(file.relative_to(AGENT_DIR))
-                        zf.write(file, arcname)
-                        logger.info(f"  + {arcname}")
+                dest_dir = os.path.join(build_dir, source)
+                shutil.copytree(str(source_path), dest_dir, dirs_exist_ok=True)
+                logger.info(f"  + {source}/ (directory)")
             else:
                 logger.warning(f"  ! {source} not found — skipping")
 
-    size_kb = os.path.getsize(zip_path) / 1024
-    logger.info(f"Agent zip created: {size_kb:.1f} KB")
-    return zip_path
+        # Zip the build dir
+        tmp      = tempfile.NamedTemporaryFile(suffix='.zip', delete=False)
+        zip_path = tmp.name
+        tmp.close()
+
+        logger.info(f"Zipping build dir to {zip_path}")
+        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+            for root, dirs, files in os.walk(build_dir):
+                # Skip __pycache__ and .dist-info test dirs to keep zip lean
+                dirs[:] = [
+                    d for d in dirs
+                    if '__pycache__' not in d and d != 'tests' and d != 'test'
+                ]
+                for file in files:
+                    full_path = os.path.join(root, file)
+                    arcname   = os.path.relpath(full_path, build_dir)
+                    zf.write(full_path, arcname)
+
+        size_mb = os.path.getsize(zip_path) / (1024 * 1024)
+        logger.info(f"Agent zip created: {size_mb:.1f} MB")
+        return zip_path
+
+    finally:
+        shutil.rmtree(build_dir, ignore_errors=True)
 
 
 # ── Step 3: Upload zip to S3 ──────────────────────────────────────────────────

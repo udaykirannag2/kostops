@@ -86,10 +86,16 @@ export class AuthStack extends cdk.Stack {
     });
 
     // ── Admin user ────────────────────────────────────────────────────────────
-    // Created via a CDK custom resource. Cognito sends the temporary password
-    // to adminEmail automatically (using the userInvitation template above).
+    // Created on first deploy. Cognito sends the temporary password to adminEmail
+    // using the userInvitation template above.
+    //
+    // IMPORTANT: We only create this resource when adminEmail is provided AND
+    // use a stable logical ID so CDK never deletes then re-creates the user on
+    // subsequent deploys (which would invalidate the user's set password).
+    // If adminEmail is omitted, the user must be created manually via:
+    //   aws cognito-idp admin-create-user --user-pool-id <id> --username <email> ...
     if (props.adminEmail) {
-      new cognito.CfnUserPoolUser(this, 'AdminUser', {
+      const adminUser = new cognito.CfnUserPoolUser(this, 'AdminUser', {
         userPoolId:      this.userPool.userPoolId,
         username:        props.adminEmail,
         desiredDeliveryMediums: ['EMAIL'],
@@ -99,6 +105,8 @@ export class AuthStack extends cdk.Stack {
           { name: 'email_verified', value: 'true' },
         ],
       });
+      // RETAIN so CDK never deletes the user on stack updates
+      adminUser.applyRemovalPolicy(cdk.RemovalPolicy.RETAIN);
     }
 
     // ── Outputs ───────────────────────────────────────────────────────────────

@@ -5,6 +5,8 @@ import * as cognito     from 'aws-cdk-lib/aws-cognito';
 import * as ddb         from 'aws-cdk-lib/aws-dynamodb';
 import * as iam         from 'aws-cdk-lib/aws-iam';
 import * as logs        from 'aws-cdk-lib/aws-logs';
+import * as events      from 'aws-cdk-lib/aws-events';
+import * as targets     from 'aws-cdk-lib/aws-events-targets';
 import { Construct }    from 'constructs';
 
 interface ApiStackProps extends cdk.StackProps {
@@ -84,7 +86,7 @@ export class ApiStack extends cdk.Stack {
       ATHENA_WORKGROUP:        props.athenaWorkgroup,
       ATHENA_RESULTS_BUCKET:   props.athenaResultsBucketName,
       GLUE_DATABASE:           'kostops_cur',
-      CUR_TABLE:               'cur',
+      CUR_TABLE:               'data',
       POWERTOOLS_SERVICE_NAME: 'kostops-api',
       LOG_LEVEL:               'INFO',
     };
@@ -246,6 +248,30 @@ export class ApiStack extends cdk.Stack {
       new apigateway.LambdaIntegration(dashboardHandler, { proxy: true }),
       authOptions,
     );
+
+    // ── Lambda: keepwarm-handler ──────────────────────────────────────────────
+    // Pings the AgentCore Runtime every 5 minutes to prevent cold-start timeouts.
+    // AgentCore containers spin down after ~5 min of inactivity. Without this,
+    // the first user message after idle always hits the 30s init timeout.
+    const keepwarmHandler = new lambda.Function(this, 'KeeepwarmHandler', {
+      functionName:  'kostops-keepwarm-handler',
+      runtime:       lambda.Runtime.PYTHON_3_12,
+      handler:       'keepwarm_handler.handler',
+      code:          lambda.Code.fromAsset('lambda'),
+      role:          lambdaRole,
+      timeout:       cdk.Duration.seconds(35),  // slightly over AgentCore 30s init limit
+      memorySize:    128,
+      environment:   commonEnv,
+      logRetention:  logs.RetentionDays.THREE_DAYS,
+    });
+
+    // EventBridge rule: ping every 5 minutes
+    new events.Rule(this, 'AgentKeepWarmRule', {
+      ruleName:    'kostops-agent-keepwarm',
+      description: 'Keeps AgentCore Runtime container warm to avoid 30s cold-start',
+      schedule:    events.Schedule.rate(cdk.Duration.minutes(5)),
+      targets:     [new targets.LambdaFunction(keepwarmHandler)],
+    });
 
     // Ensure API stage is created after the account-level CW Logs role is set
     api.node.addDependency(cfnAccount);

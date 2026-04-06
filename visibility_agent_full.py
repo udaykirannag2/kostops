@@ -3,16 +3,22 @@ KostOps Visibility Agent
 ------------------------
 Deployed on Amazon Bedrock AgentCore Runtime.
 
-HTTP server: pure Python stdlib (http.server + ThreadingMixIn).
-NO bedrock_agentcore / NO pydantic / NO Rust .so files.
-Reason: pydantic_core's 4.1 MB ARM64 .so exceeds AgentCore's 30s
-        cold-start initialization timeout when loaded via dlopen().
+Uses boto3.converse() directly instead of strands-agents.
+This eliminates Rust extension cold-start overhead:
+  removed: pydantic_core (4.1 MB .so), yaml (2.6 MB .so), rpds (1.0 MB .so)
+  result:  startup < 5s vs > 30s with strands-agents
 
-Agent loop: boto3.converse() — pure Python, ships in the zip.
+Agent loop:
+  1. Send message + tool schemas to Claude via bedrock-runtime.converse()
+  2. If stopReason == 'tool_use': call the tool, feed result back
+  3. Repeat until stopReason == 'end_turn'
+  4. Return final text response
 
-Protocol (AgentCore Runtime):
-  GET  /ping          → {"status": "Healthy"}
-  POST /invocations   → {"inputText": "..."} → {"output": "..."}
+Tool schemas are auto-generated from:
+  - Function name         → tool name
+  - First docstring line  → tool description
+  - Type annotations      → parameter types
+  - Parameters with no default → required list
 """
 
 import os
@@ -21,21 +27,20 @@ import time
 import inspect
 import logging
 import threading
-from http.server import HTTPServer, BaseHTTPRequestHandler
-from socketserver import ThreadingMixIn
-from typing import get_type_hints, Optional, List, Dict, Any
 import boto3
+from typing import get_type_hints, Optional, List, Dict, Any
+from bedrock_agentcore import BedrockAgentCoreApp
 
-# ── Startup timing ────────────────────────────────────────────────────────────
+# ── Startup timing — helps diagnose cold-start issues ────────────────────────
 _t0 = time.time()
 def _elapsed() -> str:
     return f"{time.time() - _t0:.1f}s"
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-logger.info(f"[startup] imports done at {_elapsed()}")
+logger.info(f"[startup] bedrock_agentcore imported at {_elapsed()}")
 
-# ── Tool imports ──────────────────────────────────────────────────────────────
+# ── Tool imports (use @tool stub from strands/__init__.py — no pydantic) ─────
 from tools.billing_tools import (
     get_cost_and_usage,
     get_cost_forecast,
@@ -135,33 +140,45 @@ _PY_TO_JSON_TYPE: Dict[type, str] = {
 }
 
 def _resolve_type(annotation) -> str:
+    """Convert a Python type annotation to a JSON Schema type string."""
     if annotation is inspect.Parameter.empty:
         return 'string'
+
+    # Handle Optional[X] → X
     origin = getattr(annotation, '__origin__', None)
     args   = getattr(annotation, '__args__', ())
+
     if origin is type(None):
         return 'string'
+
+    # typing.Union (covers Optional)
     import typing
     if origin is typing.Union:
         non_none = [a for a in args if a is not type(None)]
         return _resolve_type(non_none[0]) if non_none else 'string'
+
     if origin in (list, List):
         return 'array'
     if origin in (dict, Dict):
         return 'object'
+
     return _PY_TO_JSON_TYPE.get(annotation, 'string')
 
 
 def _make_tool_spec(fn) -> dict:
+    """Build a Bedrock Converse API toolSpec dict from a Python function."""
     doc = inspect.getdoc(fn) or fn.__name__
     description = doc.split('\n')[0].strip()
+
     try:
         hints = get_type_hints(fn)
     except Exception:
         hints = {}
+
     sig        = inspect.signature(fn)
     properties: Dict[str, Any] = {}
     required:   List[str]      = []
+
     for name, param in sig.parameters.items():
         if name == 'self':
             continue
@@ -170,6 +187,7 @@ def _make_tool_spec(fn) -> dict:
         properties[name] = {'type': json_type}
         if param.default is inspect.Parameter.empty:
             required.append(name)
+
     return {
         'toolSpec': {
             'name':        fn.__name__,
@@ -188,7 +206,14 @@ def _make_tool_spec(fn) -> dict:
 # ── KostOpsAgent ──────────────────────────────────────────────────────────────
 
 class KostOpsAgent:
-    MAX_ROUNDS = 20
+    """
+    Minimal agent loop using boto3.converse().
+
+    No strands-agents, no pydantic — just boto3 (pre-installed in AgentCore
+    runtime) plus a tool-use loop that matches what strands does internally.
+    """
+
+    MAX_ROUNDS = 20   # guard against infinite tool-use loops
 
     def __init__(self, tools: list, system_prompt: str):
         self._tool_map    = {fn.__name__: fn for fn in tools}
@@ -198,8 +223,9 @@ class KostOpsAgent:
             'BEDROCK_MODEL_ID',
             'anthropic.claude-sonnet-4-5-20250929-v1:0',
         )
-        self._region  = os.environ.get('AWS_REGION', 'us-east-1')
-        self._bedrock = None
+        self._region = os.environ.get('AWS_REGION', 'us-east-1')
+        # Lazy client — created on first call (not at import time)
+        self._bedrock: Optional[Any] = None
 
     def _client(self):
         if self._bedrock is None:
@@ -207,9 +233,15 @@ class KostOpsAgent:
         return self._bedrock
 
     def __call__(self, message: str, **kwargs) -> str:
+        """
+        Run the agent loop for one user message.
+        kwargs absorbs any extra args BedrockAgentCoreApp might pass (e.g. session_id).
+        """
         if message.strip() == '__ping__':
             return 'pong'
+
         messages = [{'role': 'user', 'content': [{'text': message}]}]
+
         for round_num in range(self.MAX_ROUNDS):
             try:
                 resp = self._client().converse(
@@ -221,18 +253,24 @@ class KostOpsAgent:
             except Exception as e:
                 logger.error(f"Bedrock converse error: {e}")
                 return f"Error calling Bedrock: {e}"
+
             output_msg  = resp['output']['message']
             stop_reason = resp['stopReason']
             messages.append(output_msg)
+
             logger.info(f"[round {round_num}] stopReason={stop_reason}")
+
             if stop_reason == 'end_turn':
                 return self._extract_text(output_msg)
+
             if stop_reason == 'tool_use':
                 tool_results = self._run_tools(output_msg)
                 messages.append({'role': 'user', 'content': tool_results})
             else:
+                # max_tokens, stop_sequence, content_filtered, etc.
                 logger.warning(f"Unexpected stopReason: {stop_reason}")
                 return self._extract_text(output_msg) or f"Agent stopped: {stop_reason}"
+
         return "Agent reached maximum tool-call depth without a final answer."
 
     def _run_tools(self, message: dict) -> list:
@@ -244,6 +282,7 @@ class KostOpsAgent:
             name     = tool_use['name']
             inputs   = tool_use.get('input', {})
             tool_id  = tool_use['toolUseId']
+
             logger.info(f"Tool: {name}({list(inputs.keys())})")
             try:
                 fn     = self._tool_map[name]
@@ -258,6 +297,7 @@ class KostOpsAgent:
                 status = 'error'
                 text   = f"Tool {name} failed: {e}"
                 logger.error(text)
+
             results.append({
                 'toolResult': {
                     'toolUseId': tool_id,
@@ -280,6 +320,7 @@ class KostOpsAgent:
 agent = KostOpsAgent(
     system_prompt = SYSTEM_PROMPT,
     tools = [
+        # Billing (payer account via sts:AssumeRole)
         get_today_date,
         get_cost_and_usage,
         get_cost_forecast,
@@ -293,14 +334,17 @@ agent = KostOpsAgent(
         get_budget_list,
         get_budget_performance,
         get_cost_optimization_hub_recommendations,
+        # CUR / Athena (linked account, replicated payer data)
         get_spend_by_service,
         get_spend_by_account,
         get_spend_last_13_months,
         get_daily_spend_trend,
         get_top_cost_drivers,
+        # EC2 resource discovery (linked account)
         list_unattached_ebs_volumes,
         list_old_snapshots,
         list_nonprod_instances,
+        # Findings persistence (DynamoDB)
         save_finding,
         list_findings,
         get_finding,
@@ -309,71 +353,62 @@ agent = KostOpsAgent(
 
 logger.info(f"[startup] agent ready at {_elapsed()}")
 
-# ── AgentCore HTTP server (stdlib only — no pydantic, no Rust .so) ────────────
+# ── AgentCore Runtime wrapper ─────────────────────────────────────────────────
 #
-# bedrock_agentcore (FastAPI + pydantic_core) was removed because
-# pydantic_core's 4.1 MB ARM64 .so exceeds AgentCore's 30s cold-start
-# initialization timeout. Pure stdlib http.server starts in < 100ms.
+# BedrockAgentCoreApp() takes NO positional/keyword agent argument.
+# The agent is wired in via the @app.entrypoint decorator below.
+# Passing agent=agent raises TypeError which crashes the container immediately,
+# causing the "initialization time exceeded" error on every invocation.
 #
-# Protocol:
-#   GET  /ping          → 200 {"status": "Healthy"}
-#   POST /invocations   → 200 {"output": "<reply>"}
-
-class _AgentCoreHandler(BaseHTTPRequestHandler):
-    """HTTP handler implementing the AgentCore Runtime protocol."""
-
-    def log_message(self, fmt, *args):
-        logger.debug('http: ' + fmt, *args)
-
-    def _send_json(self, code: int, data: dict):
-        body = json.dumps(data, ensure_ascii=False).encode('utf-8')
-        self.send_response(code)
-        self.send_header('Content-Type', 'application/json; charset=utf-8')
-        self.send_header('Content-Length', str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-    def do_GET(self):
-        if self.path == '/ping':
-            self._send_json(200, {'status': 'Healthy'})
-        else:
-            self._send_json(404, {'error': 'not found'})
-
-    def do_POST(self):
-        if self.path == '/invocations':
-            length = int(self.headers.get('Content-Length', 0))
-            raw    = self.rfile.read(length) if length else b'{}'
-            try:
-                payload = json.loads(raw)
-            except Exception:
-                self._send_json(400, {'error': 'invalid JSON'})
-                return
-
-            message = (payload or {}).get('inputText', '').strip()
-            if not message:
-                self._send_json(200, {'output': 'No message provided.'})
-                return
-
-            logger.info(f"Invocation | message_len={len(message)}")
-            try:
-                reply = agent(message)
-                logger.info(f"Invocation done | reply_len={len(reply)}")
-                self._send_json(200, {'output': reply})
-            except Exception as e:
-                logger.exception("Agent invocation failed")
-                self._send_json(500, {'output': f'Agent error: {e}'})
-        else:
-            self._send_json(404, {'error': 'not found'})
+app = BedrockAgentCoreApp()
+logger.info(f"[startup] BedrockAgentCoreApp created at {_elapsed()}")
 
 
-class _ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
-    """Handle each request in a separate thread."""
-    daemon_threads = True
-    allow_reuse_address = True
+@app.entrypoint
+def handle(payload: dict, context=None) -> dict:
+    """
+    AgentCore Runtime entry point.
+
+    Called by BedrockAgentCoreApp for every POST /invocations request.
+    payload = {'inputText': '<user message>'}   (sent by chat_handler.py)
+    Returns {'output': '<agent reply>'}          (read by chat_handler.py)
+    """
+    message = (payload or {}).get('inputText', '').strip()
+
+    if not message:
+        return {'output': 'No message provided.'}
+
+    logger.info(f"Entrypoint called | message_len={len(message)}")
+    reply = agent(message)
+    logger.info(f"Entrypoint done   | reply_len={len(reply)}")
+    return {'output': reply}
 
 
-# ── Start server (module level — runs whether imported or executed) ───────────
-logger.info(f"[startup] starting HTTP server on 0.0.0.0:8080 at {_elapsed()}")
-_server = _ThreadedHTTPServer(('0.0.0.0', 8080), _AgentCoreHandler)
-logger.info(f"[startup] HTTP server ready at {_elapsed()} — serving AgentCore requests")
-_server.serve_forever()
+logger.info(f"[startup] entrypoint registered at {_elapsed()}")
+
+# ── Start the HTTP server ─────────────────────────────────────────────────────
+#
+# app.run() is called at module level (NOT inside `if __name__ == '__main__'`)
+# because AgentCore Runtime may IMPORT this file as a module rather than
+# running it as a script. If it's inside __main__, app.run() is never called
+# when the runtime imports the module, so the HTTP server never starts.
+#
+# host='0.0.0.0' is required: AgentCore Runtime containers may not set
+# /.dockerenv or DOCKER_CONTAINER, causing app.run() to default to 127.0.0.1
+# (loopback only). The AgentCore platform reaches the container from outside
+# and cannot connect to loopback, causing every health check to time out.
+
+import sys as _sys
+
+if '--local' in _sys.argv:
+    # Local REPL mode — skip the HTTP server
+    print("KostOps running locally. Type 'exit' to quit.\n")
+    while True:
+        _user_input = input("You: ").strip()
+        if _user_input.lower() in ("exit", "quit"):
+            break
+        _response = agent(_user_input)
+        print(f"\nKostOps: {_response}\n")
+else:
+    logger.info(f"[startup] calling app.run() at {_elapsed()}")
+    app.run(host='0.0.0.0')

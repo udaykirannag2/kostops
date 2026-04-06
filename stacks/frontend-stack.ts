@@ -4,6 +4,8 @@ import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as origins    from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as s3deploy   from 'aws-cdk-lib/aws-s3-deployment';
 import { Construct }   from 'constructs';
+import * as fs         from 'fs';
+import * as path       from 'path';
 
 interface FrontendStackProps extends cdk.StackProps {
   apiUrl:           string;
@@ -28,6 +30,18 @@ export class FrontendStack extends cdk.Stack {
 
   constructor(scope: Construct, id: string, props: FrontendStackProps) {
     super(scope, id, props);
+
+    // ── Auto-generate frontend/.env from CDK props ────────────────────────────
+    // Vite bakes VITE_* variables into the bundle at build time, so we write
+    // .env before the BucketDeployment asset is synthesised. This means
+    // `cdk deploy` is all a customer needs to run — no manual .env step.
+    const envPath = path.join(__dirname, '..', 'frontend', '.env');
+    fs.writeFileSync(envPath, [
+      `VITE_USER_POOL_ID=${props.userPoolId}`,
+      `VITE_USER_POOL_CLIENT_ID=${props.userPoolClientId}`,
+      `VITE_API_URL=${props.apiUrl}`,
+      '',
+    ].join('\n'));
 
     // ── S3 bucket — private, no static website hosting ────────────────────────
     // CloudFront serves the content directly from S3 via OAC.

@@ -53,6 +53,9 @@ agentStack.addDependency(authStack);
 agentStack.addDependency(dataStack);
 
 // 4 — API (Lambda + API Gateway)
+// agentStack.agentRuntimeArn is set by the Custom Resource after AgentCore
+// Runtime creation; CDK passes it to ApiStack as an environment variable on
+// the keepwarm Lambda (chat-handler gets it via update_references in Lambda).
 const apiStack = new ApiStack(app, 'KostOpsApiStack', {
   env,
   findingsTable:           dataStack.findingsTable,
