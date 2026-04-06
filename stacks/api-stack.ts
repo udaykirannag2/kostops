@@ -10,12 +10,15 @@ import * as targets     from 'aws-cdk-lib/aws-events-targets';
 import { Construct }    from 'constructs';
 
 interface ApiStackProps extends cdk.StackProps {
-  findingsTable:         ddb.Table;
-  agentEndpointUrl:      string;
-  userPool:              cognito.UserPool;
-  slackWebhookUrl:       string;
-  athenaWorkgroup:       string;
+  findingsTable:           ddb.Table;
+  integrationsTable:       ddb.Table;
+  conversationsTable:      ddb.Table;
+  agentEndpointUrl:        string;
+  userPool:                cognito.UserPool;
+  slackWebhookUrl:         string;
+  athenaWorkgroup:         string;
   athenaResultsBucketName: string;
+  agentRuntimeArn:         string;
 }
 
 /**
@@ -52,8 +55,22 @@ export class ApiStack extends cdk.Stack {
       ],
     });
 
-    // DynamoDB access for findings-handler and slack-handler
+    // DynamoDB access for findings-handler, slack-handler, integrations-handler, chat-sessions-handler
     props.findingsTable.grantReadWriteData(lambdaRole);
+    props.integrationsTable.grantReadWriteData(lambdaRole);
+    props.conversationsTable.grantReadWriteData(lambdaRole);
+
+    // SSM access for integrations-handler and slack-handler (read/write secrets)
+    lambdaRole.addToPolicy(new iam.PolicyStatement({
+      sid:     'IntegrationSecrets',
+      actions: [
+        'ssm:GetParameter',
+        'ssm:PutParameter',
+        'ssm:DeleteParameter',
+        'ssm:DescribeParameters',
+      ],
+      resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter/kostops/integrations/*`],
+    }));
 
     // Invoke AgentCore Runtime for chat-handler
     lambdaRole.addToPolicy(new iam.PolicyStatement({
@@ -81,8 +98,11 @@ export class ApiStack extends cdk.Stack {
 
     const commonEnv: Record<string, string> = {
       FINDINGS_TABLE:          props.findingsTable.tableName,
+      INTEGRATIONS_TABLE:      props.integrationsTable.tableName,
+      CONVERSATIONS_TABLE:     props.conversationsTable.tableName,
       AGENT_ENDPOINT_URL:      props.agentEndpointUrl,
-      SLACK_WEBHOOK_URL:       props.slackWebhookUrl,
+      AGENT_RUNTIME_ARN:       props.agentRuntimeArn,
+      SLACK_WEBHOOK_URL:       props.slackWebhookUrl,   // fallback; prefer SSM
       ATHENA_WORKGROUP:        props.athenaWorkgroup,
       ATHENA_RESULTS_BUCKET:   props.athenaResultsBucketName,
       GLUE_DATABASE:           'kostops_cur',
@@ -100,6 +120,19 @@ export class ApiStack extends cdk.Stack {
       role:          lambdaRole,
       timeout:       cdk.Duration.seconds(300), // Agent can take time to reason
       memorySize:    256,
+      environment:   commonEnv,
+      logRetention:  logs.RetentionDays.TWO_WEEKS,
+    });
+
+    // ── Lambda: chat-sessions-handler ────────────────────────────────────────
+    const chatSessionsHandler = new lambda.Function(this, 'ChatSessionsHandler', {
+      functionName:  'kostops-chat-sessions-handler',
+      runtime:       lambda.Runtime.PYTHON_3_12,
+      handler:       'chat_sessions_handler.handler',
+      code:          lambda.Code.fromAsset('lambda'),
+      role:          lambdaRole,
+      timeout:       cdk.Duration.seconds(30),
+      memorySize:    128,
       environment:   commonEnv,
       logRetention:  logs.RetentionDays.TWO_WEEKS,
     });
@@ -129,6 +162,40 @@ export class ApiStack extends cdk.Stack {
       environment:   commonEnv,
       logRetention:  logs.RetentionDays.TWO_WEEKS,
     });
+
+    // ── Lambda: integrations-handler ─────────────────────────────────────────
+    const integrationsHandler = new lambda.Function(this, 'IntegrationsHandler', {
+      functionName:  'kostops-integrations-handler',
+      runtime:       lambda.Runtime.PYTHON_3_12,
+      handler:       'integrations_handler.handler',
+      code:          lambda.Code.fromAsset('lambda'),
+      role:          lambdaRole,
+      timeout:       cdk.Duration.seconds(30),
+      memorySize:    128,
+      environment:   commonEnv,
+      logRetention:  logs.RetentionDays.TWO_WEEKS,
+    });
+
+    // ── Lambda: slack-command-handler ─────────────────────────────────────────
+    // Receives Slack slash commands. Needs self-invoke permission for async mode.
+    const slackCommandHandler = new lambda.Function(this, 'SlackCommandHandler', {
+      functionName:  'kostops-slack-command-handler',
+      runtime:       lambda.Runtime.PYTHON_3_12,
+      handler:       'slack_command_handler.handler',
+      code:          lambda.Code.fromAsset('lambda'),
+      role:          lambdaRole,
+      timeout:       cdk.Duration.seconds(300),  // async leg calls the agent (up to 5 min)
+      memorySize:    256,
+      environment:   commonEnv,
+      logRetention:  logs.RetentionDays.TWO_WEEKS,
+    });
+
+    // Allow slack-command-handler to invoke itself asynchronously
+    slackCommandHandler.addToRolePolicy(new iam.PolicyStatement({
+      sid:       'SelfInvoke',
+      actions:   ['lambda:InvokeFunction'],
+      resources: [slackCommandHandler.functionArn],
+    }));
 
     // ── Lambda: dashboard-handler ─────────────────────────────────────────────
     const dashboardHandler = new lambda.Function(this, 'DashboardHandler', {
@@ -210,6 +277,21 @@ export class ApiStack extends cdk.Stack {
       authOptions,
     );
 
+    // GET  /chat/sessions              — list recent sessions for the caller
+    // GET  /chat/sessions/{sessionId}  — get full message history for a session
+    const chatSessionsResource  = chatResource.addResource('sessions');
+    chatSessionsResource.addMethod(
+      'GET',
+      new apigateway.LambdaIntegration(chatSessionsHandler, { proxy: true }),
+      authOptions,
+    );
+    const chatSessionResource = chatSessionsResource.addResource('{sessionId}');
+    chatSessionResource.addMethod(
+      'GET',
+      new apigateway.LambdaIntegration(chatSessionsHandler, { proxy: true }),
+      authOptions,
+    );
+
     // GET /findings, PATCH /findings
     const findingsResource = api.root.addResource('findings');
     findingsResource.addMethod(
@@ -231,12 +313,55 @@ export class ApiStack extends cdk.Stack {
       authOptions,
     );
 
-    // POST /slack/digest
-    const slackResource  = api.root.addResource('slack');
-    const digestResource = slackResource.addResource('digest');
+    // POST /slack/digest  (authenticated — from UI)
+    const slackResource   = api.root.addResource('slack');
+    const digestResource  = slackResource.addResource('digest');
     digestResource.addMethod(
       'POST',
       new apigateway.LambdaIntegration(slackHandler, { proxy: true }),
+      authOptions,
+    );
+
+    // POST /slack/command  (NO auth — called directly by Slack API)
+    // Slack verifies the request using SLACK_SIGNING_SECRET instead of JWT.
+    const commandResource = slackResource.addResource('command');
+    commandResource.addMethod(
+      'POST',
+      new apigateway.LambdaIntegration(slackCommandHandler, { proxy: true }),
+      { authorizationType: apigateway.AuthorizationType.NONE },
+    );
+
+    // GET  /integrations
+    // GET  /integrations/{name}
+    // PUT  /integrations/{name}
+    // DELETE /integrations/{name}
+    // POST /integrations/{name}/test
+    const integrationsResource = api.root.addResource('integrations');
+    integrationsResource.addMethod(
+      'GET',
+      new apigateway.LambdaIntegration(integrationsHandler, { proxy: true }),
+      authOptions,
+    );
+    const integrationResource = integrationsResource.addResource('{name}');
+    integrationResource.addMethod(
+      'GET',
+      new apigateway.LambdaIntegration(integrationsHandler, { proxy: true }),
+      authOptions,
+    );
+    integrationResource.addMethod(
+      'PUT',
+      new apigateway.LambdaIntegration(integrationsHandler, { proxy: true }),
+      authOptions,
+    );
+    integrationResource.addMethod(
+      'DELETE',
+      new apigateway.LambdaIntegration(integrationsHandler, { proxy: true }),
+      authOptions,
+    );
+    const integrationActionResource = integrationResource.addResource('{action}');
+    integrationActionResource.addMethod(
+      'POST',
+      new apigateway.LambdaIntegration(integrationsHandler, { proxy: true }),
       authOptions,
     );
 
@@ -265,12 +390,20 @@ export class ApiStack extends cdk.Stack {
       logRetention:  logs.RetentionDays.THREE_DAYS,
     });
 
-    // EventBridge rule: ping every 5 minutes
+    // EventBridge rule: ping every 5 minutes (keep AgentCore warm)
     new events.Rule(this, 'AgentKeepWarmRule', {
       ruleName:    'kostops-agent-keepwarm',
       description: 'Keeps AgentCore Runtime container warm to avoid 30s cold-start',
       schedule:    events.Schedule.rate(cdk.Duration.minutes(5)),
       targets:     [new targets.LambdaFunction(keepwarmHandler)],
+    });
+
+    // EventBridge rule: daily Slack digest at 09:00 UTC on weekdays
+    new events.Rule(this, 'SlackDailyDigestRule', {
+      ruleName:    'kostops-slack-daily-digest',
+      description: 'Sends KostOps daily findings digest to Slack on weekdays at 9am UTC',
+      schedule:    events.Schedule.cron({ minute: '0', hour: '9', weekDay: 'MON-FRI' }),
+      targets:     [new targets.LambdaFunction(slackHandler)],
     });
 
     // Ensure API stage is created after the account-level CW Logs role is set

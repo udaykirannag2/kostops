@@ -1,11 +1,12 @@
 import { } from 'react';
 import { BrowserRouter, Routes, Route, NavLink, Navigate } from 'react-router-dom';
-import { MessageSquare, AlertTriangle, LogOut, TrendingDown, LayoutDashboard } from 'lucide-react';
+import { MessageSquare, AlertTriangle, LogOut, TrendingDown, LayoutDashboard, Puzzle } from 'lucide-react';
 import type { AuthUser } from 'aws-amplify/auth';
 import clsx from 'clsx';
 import Chat from './components/Chat';
 import Findings from './components/Findings';
 import Dashboard from './components/Dashboard';
+import Integrations from './components/Integrations';
 
 interface AppProps {
   signOut?: () => void;
@@ -33,9 +34,10 @@ export default function App({ signOut, user }: AppProps) {
 
           {/* Nav */}
           <nav className="flex-1 px-3 py-4 space-y-1">
-            <SidebarLink to="/dashboard" icon={<LayoutDashboard size={16} />} label="Dashboard" />
-            <SidebarLink to="/chat"      icon={<MessageSquare  size={16} />} label="Chat" />
-            <SidebarLink to="/findings"  icon={<AlertTriangle  size={16} />} label="Findings" />
+            <SidebarLink to="/dashboard"    icon={<LayoutDashboard size={16} />} label="Dashboard" />
+            <SidebarLink to="/chat"         icon={<MessageSquare  size={16} />} label="Chat" />
+            <SidebarLink to="/findings"     icon={<AlertTriangle  size={16} />} label="Findings" />
+            <SidebarLink to="/integrations" icon={<Puzzle         size={16} />} label="Integrations" />
           </nav>
 
           {/* User */}
@@ -59,10 +61,11 @@ export default function App({ signOut, user }: AppProps) {
         {/* ── Main content ─────────────────────────────────────────────────── */}
         <main className="flex-1 min-w-0 flex flex-col overflow-hidden">
           <Routes>
-            <Route path="/"          element={<Navigate to="/dashboard" replace />} />
-            <Route path="/dashboard" element={<Dashboard />} />
-            <Route path="/chat"      element={<Chat />} />
-            <Route path="/findings"  element={<Findings />} />
+            <Route path="/"             element={<Navigate to="/dashboard" replace />} />
+            <Route path="/dashboard"    element={<Dashboard />} />
+            <Route path="/chat"         element={<Chat />} />
+            <Route path="/findings"     element={<Findings />} />
+            <Route path="/integrations" element={<Integrations />} />
           </Routes>
         </main>
 

@@ -21,7 +21,7 @@ logger.setLevel(os.environ.get('LOG_LEVEL', 'INFO'))
 
 ATHENA_WORKGROUP  = os.environ.get('ATHENA_WORKGROUP',  'kostops-workgroup')
 GLUE_DATABASE     = os.environ.get('GLUE_DATABASE',     'kostops_cur')
-CUR_TABLE         = os.environ.get('CUR_TABLE',         'cur')
+CUR_TABLE         = os.environ.get('CUR_TABLE',         'data')
 AWS_REGION        = os.environ.get('AWS_REGION',        'us-east-1')
 
 _athena = boto3.client('athena', region_name=AWS_REGION)

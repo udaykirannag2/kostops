@@ -59,7 +59,10 @@ agentStack.addDependency(dataStack);
 const apiStack = new ApiStack(app, 'KostOpsApiStack', {
   env,
   findingsTable:           dataStack.findingsTable,
+  integrationsTable:       dataStack.integrationsTable,
+  conversationsTable:      dataStack.conversationsTable,
   agentEndpointUrl:        agentStack.agentEndpointUrl,
+  agentRuntimeArn:         agentStack.agentRuntimeArn,
   userPool:                authStack.userPool,
   slackWebhookUrl,
   athenaWorkgroup:         'kostops-workgroup',

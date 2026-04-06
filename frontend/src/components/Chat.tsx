@@ -1,8 +1,24 @@
 import { useState, useRef, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { Send, Bot, User, Loader2, Sparkles } from 'lucide-react';
+import { Send, Bot, User, Loader2, Sparkles, RotateCcw } from 'lucide-react';
 import clsx from 'clsx';
-import { sendMessage } from '../api/client';
+import { sendMessage, getChatSession } from '../api/client';
+
+// ── LocalStorage — only persists the sessionId (a lightweight UUID string).
+// Full message history is stored in DynamoDB and fetched on mount.
+const LS_SESSION_ID = 'kostops_chat_session_id';
+
+function loadSessionId(): string | null {
+  try { return localStorage.getItem(LS_SESSION_ID); } catch { return null; }
+}
+
+function saveSessionId(sessionId: string) {
+  try { localStorage.setItem(LS_SESSION_ID, sessionId); } catch { /* ignore */ }
+}
+
+function clearSessionId() {
+  try { localStorage.removeItem(LS_SESSION_ID); } catch { /* ignore */ }
+}
 
 interface Message {
   id:        string;
@@ -19,19 +35,65 @@ const SUGGESTED_PROMPTS = [
 ];
 
 export default function Chat() {
-  const [messages,   setMessages]   = useState<Message[]>([]);
-  const [input,      setInput]      = useState('');
-  const [loading,    setLoading]    = useState(false);
-  const [sessionId,  setSessionId]  = useState<string | null>(null);
-  const [error,      setError]      = useState<string | null>(null);
+  const [messages,      setMessages]      = useState<Message[]>([]);
+  const [input,         setInput]         = useState('');
+  const [loading,       setLoading]       = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(true);  // true on first mount
+  const [sessionId,     setSessionId]     = useState<string | null>(null);
+  const [error,         setError]         = useState<string | null>(null);
 
   const bottomRef  = useRef<HTMLDivElement>(null);
   const inputRef   = useRef<HTMLTextAreaElement>(null);
+
+  // ── Load history from DynamoDB on mount ────────────────────────────────────
+  // If localStorage holds a sessionId we fetched before, reload its messages
+  // from the API. On 404 (session expired/deleted) we silently start fresh.
+  useEffect(() => {
+    const storedId = loadSessionId();
+    if (!storedId) {
+      setHistoryLoading(false);
+      return;
+    }
+
+    setSessionId(storedId);
+    getChatSession(storedId)
+      .then(session => {
+        const rehydrated: Message[] = session.messages.map(m => ({
+          id:        crypto.randomUUID(),
+          role:      m.role,
+          content:   m.content,
+          timestamp: new Date(m.timestamp),
+        }));
+        setMessages(rehydrated);
+      })
+      .catch(err => {
+        // 404 = session gone; any other error — start fresh silently
+        if (!err.message?.includes('404')) {
+          console.warn('Could not load chat history:', err.message);
+        }
+        clearSessionId();
+        setSessionId(null);
+      })
+      .finally(() => setHistoryLoading(false));
+  }, []);  // runs once on mount
+
+  // Persist sessionId to localStorage whenever it changes
+  useEffect(() => {
+    if (sessionId) saveSessionId(sessionId);
+  }, [sessionId]);
 
   // Auto-scroll to latest message
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, loading]);
+
+  function handleNewChat() {
+    clearSessionId();
+    setMessages([]);
+    setSessionId(null);
+    setError(null);
+    setTimeout(() => inputRef.current?.focus(), 0);
+  }
 
   async function handleSend(text?: string) {
     const messageText = (text ?? input).trim();
@@ -87,9 +149,22 @@ export default function Chat() {
 
       {/* ── Header ─────────────────────────────────────────────────────────── */}
       <header className="flex-shrink-0 px-6 py-4 border-b border-gray-100 bg-white">
-        <div className="flex items-center gap-2">
-          <Sparkles size={18} className="text-brand-500" />
-          <h1 className="text-base font-semibold text-gray-900">Cost Intelligence</h1>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Sparkles size={18} className="text-brand-500" />
+            <h1 className="text-base font-semibold text-gray-900">Cost Intelligence</h1>
+          </div>
+          {messages.length > 0 && (
+            <button
+              onClick={handleNewChat}
+              className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-gray-700
+                         transition-colors px-2 py-1 rounded-md hover:bg-gray-100"
+              title="Start a new conversation"
+            >
+              <RotateCcw size={13} />
+              New chat
+            </button>
+          )}
         </div>
         <p className="text-xs text-gray-400 mt-0.5">
           Ask about your AWS spend, savings opportunities, or anomalies
@@ -99,8 +174,20 @@ export default function Chat() {
       {/* ── Messages ───────────────────────────────────────────────────────── */}
       <div className="flex-1 overflow-y-auto scrollbar-thin px-6 py-4 space-y-6">
 
+        {/* History loading skeleton */}
+        {historyLoading && (
+          <div className="flex flex-col gap-4 pt-4 animate-pulse">
+            {[1, 2, 3].map(i => (
+              <div key={i} className={`flex items-start gap-3 ${i % 2 === 0 ? 'flex-row-reverse' : ''}`}>
+                <div className="w-8 h-8 rounded-full bg-gray-200 flex-shrink-0" />
+                <div className={`h-10 rounded-2xl bg-gray-200 ${i % 2 === 0 ? 'w-48' : 'w-64'}`} />
+              </div>
+            ))}
+          </div>
+        )}
+
         {/* Empty state */}
-        {messages.length === 0 && (
+        {!historyLoading && messages.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full text-center">
             <div className="w-12 h-12 rounded-2xl bg-brand-50 flex items-center justify-center mb-4">
               <Bot size={24} className="text-brand-600" />

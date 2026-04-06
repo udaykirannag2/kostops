@@ -40,6 +40,12 @@ export class DataStack extends cdk.Stack {
   /** Findings table — passed to AgentStack (read/write) and ApiStack (read) */
   public readonly findingsTable: ddb.Table;
 
+  /** Integrations table — stores third-party integration metadata (Slack, Jira, etc.) */
+  public readonly integrationsTable: ddb.Table;
+
+  /** Conversations table — stores chat session history per user */
+  public readonly conversationsTable: ddb.Table;
+
   /** Athena results bucket name — passed to AgentStack for write permissions */
   public readonly athenaResultsBucketName: string;
 
@@ -282,6 +288,46 @@ export class DataStack extends cdk.Stack {
       partitionKey:  { name: 'type',      type: ddb.AttributeType.STRING },
       sortKey:       { name: 'createdAt', type: ddb.AttributeType.STRING },
       projectionType: ddb.ProjectionType.ALL,
+    });
+
+    // ── 5. DynamoDB integrations table ───────────────────────────────────────
+    // Stores integration metadata (Slack channel, notification prefs, etc.).
+    // Secrets (webhook URLs, tokens) are stored separately in SSM SecureString.
+    //
+    // Schema:
+    //   pk   (PK, String) — "INTEGRATION#slack" | "INTEGRATION#jira" | ...
+    //   sk   (SK, String) — "CONFIG"
+    //   name, enabled, config, configuredAt, updatedAt
+    this.integrationsTable = new ddb.Table(this, 'IntegrationsTable', {
+      tableName:    'kostops-integrations',
+      partitionKey: { name: 'pk', type: ddb.AttributeType.STRING },
+      sortKey:      { name: 'sk', type: ddb.AttributeType.STRING },
+      billingMode:  ddb.BillingMode.PAY_PER_REQUEST,
+      encryption:   ddb.TableEncryption.AWS_MANAGED,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+
+    // ── 6. DynamoDB conversations table ─────────────────────────────────────
+    // Stores chat session history so users can resume conversations across
+    // browser refreshes and devices. Each item = one chat session.
+    //
+    // Schema:
+    //   userId      (PK, String) — Cognito sub (UUID) from JWT claims
+    //   sessionId   (SK, String) — AgentCore runtimeSessionId (UUID)
+    //   title       (String)    — first user message, truncated to 80 chars
+    //   messages    (String)    — JSON-encoded [{role, content, timestamp}]
+    //   messageCount(Number)    — cached count for list view
+    //   updatedAt   (String)    — ISO 8601 timestamp of last turn
+    //   ttl         (Number)    — Unix epoch; DynamoDB auto-deletes after 30 days
+    this.conversationsTable = new ddb.Table(this, 'ConversationsTable', {
+      tableName:    'kostops-conversations',
+      partitionKey: { name: 'userId',    type: ddb.AttributeType.STRING },
+      sortKey:      { name: 'sessionId', type: ddb.AttributeType.STRING },
+      billingMode:  ddb.BillingMode.PAY_PER_REQUEST,
+      encryption:   ddb.TableEncryption.AWS_MANAGED,
+      timeToLiveAttribute: 'ttl',
+      removalPolicy: cdk.RemovalPolicy.DESTROY,  // conversations are ephemeral
+      autoDeleteObjects: false,
     });
 
     // ── Outputs ───────────────────────────────────────────────────────────────

@@ -54,6 +54,37 @@ export function sendMessage(
   });
 }
 
+// ── Chat Sessions ─────────────────────────────────────────────────────────────
+
+export interface ChatMessage {
+  role:      'user' | 'assistant';
+  content:   string;
+  timestamp: string;  // ISO 8601
+}
+
+export interface ChatSessionSummary {
+  sessionId:    string;
+  title:        string;
+  updatedAt:    string;
+  messageCount: number;
+}
+
+export interface ChatSessionDetail extends ChatSessionSummary {
+  messages: ChatMessage[];
+}
+
+export interface ChatSessionsResponse {
+  sessions: ChatSessionSummary[];
+}
+
+export function listChatSessions(): Promise<ChatSessionsResponse> {
+  return apiFetch<ChatSessionsResponse>('/chat/sessions');
+}
+
+export function getChatSession(sessionId: string): Promise<ChatSessionDetail> {
+  return apiFetch<ChatSessionDetail>(`/chat/sessions/${sessionId}`);
+}
+
 // ── Findings ──────────────────────────────────────────────────────────────────
 
 export type FindingStatus = 'OPEN' | 'RESOLVED' | 'IGNORED';
@@ -99,6 +130,50 @@ export function updateFinding(
 
 export function triggerSlackDigest(): Promise<{ sent: boolean; findings: number }> {
   return apiFetch('/slack/digest', { method: 'POST' });
+}
+
+// ── Integrations ──────────────────────────────────────────────────────────────
+
+export interface Integration {
+  name:         string;
+  displayName:  string;
+  description:  string;
+  icon:         string;
+  connected:    boolean;
+  configuredAt: string | null;
+  config:       Record<string, unknown>;
+  secrets?:     Record<string, string>;  // masked values only
+}
+
+export interface IntegrationsResponse {
+  integrations: Integration[];
+}
+
+export function listIntegrations(): Promise<IntegrationsResponse> {
+  return apiFetch<IntegrationsResponse>('/integrations');
+}
+
+export function getIntegration(name: string): Promise<Integration> {
+  return apiFetch<Integration>(`/integrations/${name}`);
+}
+
+export function saveIntegration(
+  name:    string,
+  config:  Record<string, unknown>,
+  secrets: Record<string, string>,
+): Promise<{ name: string; connected: boolean; configuredAt: string }> {
+  return apiFetch(`/integrations/${name}`, {
+    method: 'PUT',
+    body:   JSON.stringify({ config, secrets }),
+  });
+}
+
+export function deleteIntegration(name: string): Promise<{ connected: boolean }> {
+  return apiFetch(`/integrations/${name}`, { method: 'DELETE' });
+}
+
+export function testIntegration(name: string): Promise<{ ok: boolean; message: string }> {
+  return apiFetch(`/integrations/${name}/test`, { method: 'POST' });
 }
 
 // ── Dashboard ─────────────────────────────────────────────────────────────────
