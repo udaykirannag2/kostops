@@ -1,8 +1,8 @@
 # KostOps
 
 A self-hosted AWS FinOps agent that runs entirely in your AWS account.
-Deploy it, connect your billing data, and get ranked savings opportunities
-with an AI chat interface. Pay AWS for compute. Pay nobody else.
+Deploy it, connect your billing data, savings opportunities and Agentic AI to analyze and take actions.
+Pay AWS for compute. Pay nobody else.
 
 ## What it does
 
