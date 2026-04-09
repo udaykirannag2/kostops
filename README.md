@@ -42,7 +42,7 @@ right log for whatever is failing.
 | CUR prefix auto-detection failed | CloudWatch Logs → `/aws/lambda/kostops-cur-prefix-detector` |
 | Glue crawler did not start at deploy | CloudWatch Logs → log group starting with `/aws/lambda/KostOpsDataStack-CurPrefixProvider` (CDK framework Lambda) |
 | Payer bucket policy failed to apply | CloudWatch Logs → log group starting with `/aws/lambda/KostOpsPayerStack-AWS` (CDK AwsCustomResource framework Lambda) |
-| `deploy_agent.py` failed | Terminal output — the script logs to stdout. Also: AWS Console → CloudFormation → KostOpsAgentStack → Events |
+| AgentCore Runtime creation failed | CloudWatch Logs → log group starting with `/aws/lambda/KostOpsAgentStack-AWS` (CDK AwsCustomResource framework Lambda). Also: AWS Console → Bedrock → AgentCore → Runtimes |
 
 **Quickest way to see all deploy-time errors in one place:**
 ```bash
@@ -123,8 +123,16 @@ Use this checklist to verify each stage. Helps catch problems early in customer 
 
 ### Stage 2 — Linked account stacks deployed (`cdk deploy --all`)
 
-- [ ] All 5 stacks `CREATE_COMPLETE`: AuthStack, DataStack, AgentStack, ApiStack, FrontendStack
-- [ ] Cognito User Pool exists in us-east-1 → check CloudFormation output `UserPoolId`
+> **Two runs required on first deploy.**  
+> Run 1 creates all infrastructure. At synthesis time the backend stacks don't exist
+> yet, so `runtime-config.json` cannot be written. A `NextStep` output tells you to
+> run again. Run 2 finds the real Cognito/API values and writes the config file —
+> after which the UI is fully operational.
+
+- [ ] Run 1 ends with a `NextStep` output: *"Run `npx cdk deploy --all` one more time to finalize frontend config"*
+- [ ] All 5 stacks `CREATE_COMPLETE` after run 1: AuthStack, DataStack, AgentStack, ApiStack, FrontendStack
+- [ ] Run 2 (same command) completes and prints `SiteUrl` with a real CloudFront domain
+- [ ] Cognito User Pool exists → check CloudFormation output `UserPoolId`
 - [ ] Admin user received temporary password email
 - [ ] S3 bucket `kostops-athena-results-<account-id>` exists
 - [ ] DynamoDB table `kostops-findings` exists with `status-index` GSI
@@ -175,9 +183,11 @@ aws logs tail /aws/lambda/kostops-cur-prefix-detector --since 1h
 ```
 Common cause: no parquet files exist yet (CUR was just enabled — wait 24h for first delivery).
 
-### Stage 4 — Agent deployed (`python scripts/deploy_agent.py`)
+### Stage 4 — Agent deployed (automatic — no manual step needed)
 
-- [ ] Script exits with `KostOps agent deployed successfully!`
+The AgentCore Runtime is built and deployed automatically during `cdk deploy --all`
+via a CDK custom resource. No separate script required.
+
 - [ ] AgentCore Runtime status is `READY`:
   ```bash
   aws bedrock-agentcore-control list-agent-runtimes \
@@ -186,8 +196,16 @@ Common cause: no parquet files exist yet (CUR was just enabled — wait 24h for 
 - [ ] Lambda `kostops-chat-handler` has `AGENT_RUNTIME_ARN` env var set
 
 **If runtime fails with `RuntimeClientError: initialization time exceeded`:**
-- The zip is missing Python dependencies — run `deploy_agent.py` (it bundles them automatically)
-- Check the runtime uses ARM64-compatible wheels (the script uses `manylinux2014_aarch64`)
+- The AgentCore Runtime zip must include `boto3` and all its dependencies
+  (`botocore`, `s3transfer`, `jmespath`). These are NOT pre-installed by the runtime.
+- Redeploy `KostOpsAgentStack` — the CDK custom resource re-bundles and re-uploads
+  the zip automatically.
+- If the error persists, check the CDK custom resource logs:
+  ```bash
+  aws logs describe-log-groups \
+    --log-group-name-prefix /aws/lambda/KostOpsAgentStack-AWS \
+    --query 'logGroups[*].logGroupName' --output table
+  ```
 
 ### Stage 5 — UI works end-to-end
 
@@ -198,7 +216,7 @@ Common cause: no parquet files exist yet (CUR was just enabled — wait 24h for 
 
 **If chat returns "Failed to fetch":**
 - Open browser DevTools → Network → look at the `/chat` API call → check response body
-- Common causes: CORS (API Gateway stage not deployed), AGENT_RUNTIME_ARN not set, Cognito JWT expired
+- Common causes: CORS (API Gateway stage not deployed), AGENT_RUNTIME_ARN not set, Cognito JWT expired, AgentCore Runtime not yet `READY`
 
 ---
 
@@ -260,7 +278,7 @@ This creates:
 - SSM parameters `/kostops/payer/*` for the linked account deploy to read
 - The final CDK output shows you the exact command to run next
 
-### Step 2 — Run in your linked account (~10 minutes)
+### Step 2 — Run in your linked account (~15 minutes)
 
 Copy the command from Step 1's output, or run:
 
@@ -268,21 +286,48 @@ Copy the command from Step 1's output, or run:
 # Switch to linked account credentials
 export AWS_PROFILE=my-linked-account
 
-cd frontend && npm install && npm run build && cd ..
-
+# First run — creates all infrastructure
+# (frontend npm install + build and agent bundle happen automatically)
 cdk deploy --all \
   --context payerAccountId=987654321098 \
   --context payerCrossAccountRoleArn=arn:aws:iam::987654321098:role/kostops-cross-account-role \
   --context payerCurBucketName=my-existing-cur-bucket \
   --context adminEmail=you@yourcompany.com \
-  --context slackWebhookUrl=https://hooks.slack.com/services/YOUR/WEBHOOK
-
-python scripts/deploy_agent.py
+  --context slackWebhookUrl=<your-slack-webhook-url>
 ```
+
+At the end of the first run you will see:
+
+```
+KostOpsFrontendStack.NextStep = Run `npx cdk deploy --all` one more time to finalize frontend config
+```
+
+This is expected. Run it a second time with the same flags:
+
+```bash
+# Second run — writes runtime-config.json so the UI can talk to Cognito + API
+cdk deploy --all \
+  --context payerAccountId=987654321098 \
+  --context payerCrossAccountRoleArn=arn:aws:iam::987654321098:role/kostops-cross-account-role \
+  --context payerCurBucketName=my-existing-cur-bucket \
+  --context adminEmail=you@yourcompany.com \
+  --context slackWebhookUrl=<your-slack-webhook-url>
+```
+
+> **Why two runs?** CDK synthesises all stacks before deploying any of them.
+> On the first run the backend stacks (Auth, API) don't exist yet at synthesis
+> time, so the frontend config file can't be written with real Cognito IDs.
+> The second run finds the now-deployed stacks and writes the config.
+> All subsequent deploys (updates, config changes) only need one run.
+
+> **Non-US deployments:** By default KostOps uses
+> `us.anthropic.claude-sonnet-4-5-20250929-v1:0` (cross-region inference).
+> For EU or Asia-Pacific, pass `--context bedrockModelId=eu.anthropic.claude-sonnet-4-5-20250929-v1:0`
+> (or `ap.*`). CDK auto-detects the region if you omit this context.
 
 ### Step 3 — Open the UI
 
-CDK outputs the URL at the end of deploy:
+CDK outputs the URL at the end of the second deploy:
 
 ```
 KostOpsFrontendStack.SiteUrl = https://d1234abcd.cloudfront.net
@@ -290,6 +335,275 @@ KostOpsFrontendStack.SiteUrl = https://d1234abcd.cloudfront.net
 
 Log in with your admin email. Check your inbox for the temporary password.
 Ask the agent: "What are my top savings opportunities?" to run the first scan.
+
+## Integrations
+
+### Slack
+
+KostOps integrates with Slack for two-way communication:
+
+- **Outbound** — daily digest of open findings (Mon–Fri, 9 AM UTC) and cost anomaly alerts posted to a channel
+- **Inbound** — `/kostops` slash command: any team member can ask the AI agent a cost question and get an answer inside Slack
+- **Remediation approvals** *(Phase 2, not yet available)* — approve or deny automated fixes via Approve/Deny buttons in Slack
+
+**Time to complete:** ~15 minutes
+
+---
+
+#### Before you start
+
+You need **Slack Workspace Admin** (or Owner) access to create a Slack App and
+install it to your workspace. If you are not an admin, ask your Slack admin to
+follow these steps or to grant you the **App Manager** permission first.
+
+You also need KostOps already deployed (the slash command URL comes from the KostOps UI).
+
+---
+
+#### Step 1 — Create a Slack App
+
+1. Open a browser and go to **[https://api.slack.com/apps](https://api.slack.com/apps)**
+   (log in with the account that has workspace admin access if prompted)
+
+2. Click the green **Create New App** button in the top-right
+
+3. A dialog appears asking how you want to configure the app.
+   Choose **From scratch**
+
+4. Fill in:
+   - **App Name:** `KostOps` (or any name your team prefers — this is what users see in Slack)
+   - **Pick a workspace to develop your app in:** choose your company's Slack workspace from the dropdown
+
+5. Click **Create App**
+
+   > You will land on the app's settings page. The left sidebar is your navigation
+   > for the rest of these steps.
+
+6. In the left sidebar click **Basic Information**
+
+7. Scroll down to the **App Credentials** section. You will see a **Signing Secret** field
+   with a **Show** button next to it
+
+8. Click **Show**, then copy the Signing Secret and save it somewhere safe
+   (a text file or password manager) — you will paste it into KostOps in Step 5
+
+   > The Signing Secret proves to KostOps that slash command requests genuinely
+   > came from Slack and were not forged by someone else.
+
+---
+
+#### Step 2 — Set up Incoming Webhooks (so KostOps can post to Slack)
+
+Incoming Webhooks give KostOps a URL it can call to post messages to a Slack channel.
+
+1. In the left sidebar click **Incoming Webhooks**
+
+2. At the top of the page there is a toggle labelled **Activate Incoming Webhooks**.
+   Click it so it turns **ON** (green)
+
+3. Scroll down. A new section appears: **Webhook URLs for Your Workspace**.
+   Click the **Add New Webhook to Workspace** button
+
+4. A Slack permission screen opens. Use the dropdown to choose the channel KostOps
+   should post to — for example `#finops-alerts`. If the channel does not exist yet,
+   create it in Slack first, then come back here
+
+5. Click **Allow**
+
+6. You are returned to the Incoming Webhooks page. You will now see a webhook URL
+   (it starts with `hooks.slack.com/services/` followed by three path segments).
+   Click **Copy** next to it and save it alongside the Signing Secret from Step 1.
+
+   > **Test it (optional):** The page shows a `curl` command you can paste into a
+   > terminal to send a test message to the channel right now.
+
+---
+
+#### Step 3 — Find your KostOps slash command URL
+
+Before configuring the slash command in Slack, you need the endpoint URL from KostOps.
+
+1. Open the KostOps web UI (the CloudFront URL from your deployment)
+
+2. In the left navigation click **Integrations**, then click **Connect** on the Slack card
+
+3. In the Slack configuration panel, look for the section labelled
+   **Slash Command Setup**. You will see a URL that looks like:
+   ```
+   https://xxxxxxxxxxxx.execute-api.us-east-1.amazonaws.com/prod/slack/command
+   ```
+   Click the **Copy** button next to it
+
+   > Keep this browser tab open — you will come back to it in Step 5.
+
+---
+
+#### Step 4 — Create the `/kostops` Slash Command
+
+1. Go back to the Slack App settings tab (api.slack.com/apps → your KostOps app)
+
+2. In the left sidebar click **Slash Commands**
+
+3. Click **Create New Command**
+
+4. Fill in the form exactly as follows:
+
+   | Field | What to enter |
+   |-------|---------------|
+   | **Command** | `/kostops` |
+   | **Request URL** | Paste the URL you copied from the KostOps UI in Step 3 |
+   | **Short Description** | `Ask KostOps a question about your AWS costs` |
+   | **Usage Hint** | `What are my top savings opportunities?` |
+   | **Escape channels, users, and links** | Leave unchecked |
+
+5. Click **Save**
+
+   > **What this does:** When any workspace member types `/kostops` followed by a
+   > question, Slack sends that question to KostOps, the AI agent processes it,
+   > and the answer is posted back in the same Slack conversation — usually within
+   > 10–30 seconds.
+
+---
+
+#### Step 5 — Install the App to your Workspace
+
+The app must be installed before it can do anything.
+
+1. In the left sidebar click **OAuth & Permissions**
+
+2. Scroll down to **Scopes → Bot Token Scopes**. Verify the following scopes are listed
+   (they are usually added automatically; if any are missing click **Add an OAuth Scope**):
+
+   | Scope | Why it is needed |
+   |-------|-----------------|
+   | `incoming-webhook` | Lets KostOps post digest and alert messages |
+   | `commands` | Lets KostOps receive `/kostops` slash commands |
+   | `chat:write` | Lets KostOps post the agent's answer back to the user |
+
+3. Scroll back to the top of the **OAuth & Permissions** page
+
+4. Click the **Install to Workspace** button (or **Reinstall to Workspace** if the app
+   was previously installed)
+
+5. A Slack permission screen appears summarising what the app can do. Click **Allow**
+
+6. You are returned to the OAuth page. You will see a **Bot User OAuth Token** that
+   starts with `xoxb-`. You do not need to copy this token — KostOps uses the
+   webhook URL and Signing Secret instead.
+
+   > ✅ **Checkpoint:** At this point the Slack App is installed. If you open the
+   > channel you selected in Step 2, you should see a message: *"[Your App Name]
+   > was added to #your-channel"*
+
+   > ⚠️ **Important — Reinstall after every change:** Slack only picks up new or
+   > updated slash commands, scopes, and webhook URLs **after a reinstall**.
+   > Any time you edit the slash command URL, add a scope, or change settings in
+   > the Slack App dashboard, you **must** return to **OAuth & Permissions** and
+   > click **Reinstall to Workspace** again, then click **Allow**.
+   > Without this step the changes have no effect and `/kostops` will not appear
+   > in Slack's command picker.
+
+---
+
+#### Step 6 — Save the credentials in KostOps
+
+1. Go back to the KostOps UI tab you left open in Step 3
+   (Integrations → Slack configuration panel)
+
+2. Fill in the fields:
+
+   | Field | Where to get the value |
+   |-------|----------------------|
+   | **Incoming Webhook URL** | The URL you copied in Step 2 |
+   | **Signing Secret** | The secret you copied in Step 1 |
+   | **Default Channel** | The channel name you chose, including the `#` (e.g. `#finops-alerts`) |
+
+3. Under **Notification Triggers**, choose which events should send a Slack message:
+   - **Daily digest** — recommended ON. Posts top open findings every weekday at 9 AM UTC
+   - **Cost anomaly alerts** — recommended ON. Posts an alert when unusual spend is detected
+   - **New finding created** — optional. Posts a message each time a new P0 or P1 savings finding is saved
+
+4. Click **Test Connection**. You should see a success message and a test notification
+   appear in your Slack channel within a few seconds
+
+5. If the test succeeds, click **Save**
+
+   > **If the test fails:** Double-check that you copied the full webhook URL from
+   > Step 2. It should start with `hooks.slack.com/services/` followed by three path
+   > segments. A single missing character will cause it to fail silently.
+
+---
+
+#### Step 7 — Verify the slash command works
+
+1. Open Slack and navigate to any channel or DM
+
+2. Type `/` — Slack's command picker should appear. Start typing `kostops` and you
+   should see `/kostops` appear in the list with the description you set in Step 4
+
+   > **`/kostops` not showing in the picker?** This almost always means the app
+   > was not reinstalled after the slash command was created. Go to
+   > **api.slack.com/apps → your app → OAuth & Permissions → Reinstall to Workspace**,
+   > click **Allow**, then try again.
+
+3. Select `/kostops` (or type the full command), add your question, and press Enter:
+   ```
+   /kostops What are my top savings opportunities?
+   ```
+
+4. You should immediately see a *"🔍 Looking into that for you…"* response from the
+   bot, followed by the actual answer from the KostOps agent within 10–30 seconds
+
+   > If you see "Hmm, that didn't work" from Slack, the Request URL in Step 4
+   > is incorrect. Go back to the Slack App → Slash Commands → edit `/kostops`,
+   > re-paste the URL from the KostOps UI, click Save, then **reinstall the app**.
+
+---
+
+#### Step 8 — Enable Approve/Deny buttons *(Phase 2 only — skip for now)*
+
+> **Skip this step.** Remediation approvals via Slack buttons are not yet available.
+> This step will be needed when the Remediation Agent ships in Phase 2.
+> Instructions will be updated at that time.
+
+When Phase 2 is available, this step will require setting a second URL
+(`/slack/interactive`) in the Slack App under **Interactivity & Shortcuts**.
+
+---
+
+#### How it works end-to-end
+
+```
+Daily digest (automatic)
+  Mon–Fri at 9 AM UTC
+    └── KostOps reads top 10 OPEN findings from its database
+          └── Posts a formatted summary to your Slack channel
+
+Slash command (any team member, any time)
+  User types: /kostops What are my top savings opportunities?
+    └── Slack sends the question to KostOps
+          ├── KostOps immediately replies "Thinking…" (required within 3 seconds)
+          ├── KostOps agent analyses your AWS cost data
+          └── Posts the full answer back to Slack (10–30 seconds)
+```
+
+---
+
+#### Troubleshooting
+
+| Problem | Likely cause | Fix |
+|---------|-------------|-----|
+| Test Connection fails | Wrong webhook URL | Re-copy the full URL from Slack App → Incoming Webhooks |
+| `/kostops` does not appear in the command picker | App not reinstalled after slash command was created or edited | Go to **OAuth & Permissions → Reinstall to Workspace → Allow** |
+| Slash command shows "Hmm, that didn't work" | Wrong Request URL, or app not reinstalled after URL change | Re-copy the URL from KostOps UI → Integrations → Slack, then reinstall the app |
+| Slash command shows nothing after "🔍 Thinking…" | Agent timeout or error | Check AWS CloudWatch → `/aws/lambda/kostops-slack-command-handler` |
+| Daily digest not arriving | App not installed or wrong channel | Confirm Step 5 completed and the channel name in Step 6 is correct |
+| "Signature verification failed" in logs | Signing Secret mismatch | Re-copy the Signing Secret from Slack App → Basic Information → App Credentials, then re-save in KostOps UI |
+| "Not allowed to post to channel" | Bot not in the channel | In Slack, open the channel → Settings → Integrations → Add apps → select your KostOps app |
+| Workspace admin blocked app installation | Enterprise/managed workspace restriction | Ask your Slack admin to approve the app under **Slack Admin → Manage Apps** |
+| Changes to the app have no effect | App not reinstalled after changes | Any config change in the Slack App dashboard (URL, scopes, settings) requires **Reinstall to Workspace** to take effect |
+
+---
 
 ## Destroying
 
@@ -682,6 +996,57 @@ Recommendations page (V3)
 │
 └── [Send report] — now includes trend data in email
 ```
+
+#### Rightsizing Dashboard — Compute Optimizer → QuickSight
+
+Replace the placeholder rightsizing dashboard with **real AWS Compute Optimizer recommendations**
+surfaced as an interactive QuickSight embed — same CID pattern, no extra cost.
+
+**How CID does it (and how we'll match it):**
+
+```
+AWS Compute Optimizer
+  └── ExportEC2InstanceRecommendations → S3 (daily parquet, native AWS export — free)
+        ↓
+  Glue crawler → kostops_cur Glue database (new table: compute_optimizer_recommendations)
+        ↓
+  Athena view: rightsizing_view
+        ↓
+  QuickSight SPICE dataset: kostops-rightsizing-view
+        ↓
+  Rightsizing & Waste dashboard (replaces current placeholder)
+```
+
+**What the dashboard shows (per CID spec):**
+
+| Visual | Description |
+|---|---|
+| Potential monthly savings | KPI card — total $ if all recommendations applied |
+| Recommendations by finding | Donut — OVER_PROVISIONED / UNDER_PROVISIONED / OPTIMIZED |
+| Top 25 over-provisioned instances | Table — instance ID, current type, recommended type, CPU p99, savings/month |
+| Savings by instance family | Bar — which families have most waste (m5, c5, r5 etc.) |
+| Recommendations trend | Line — number of open recommendations over last 13 weeks |
+
+**What Compute Optimizer export contains (richer than API):**
+- `current_instance_type`, `recommended_instance_type`
+- `cpu_utilization_p99`, `memory_utilization_p99`
+- `estimated_monthly_savings`, `finding` (OVER_PROVISIONED / UNDER_PROVISIONED)
+- `account_id`, `region`, `instance_arn`, `last_refresh_timestamp`
+
+**Implementation steps:**
+1. `quicksight_setup_handler.py` — call `compute_optimizer.export_ec2_instance_recommendations()` to S3 at setup time; add Glue table + Athena `rightsizing_view`; add SPICE dataset; replace rightsizing dashboard definition
+2. CDK / EventBridge — weekly rule triggers a Lambda to re-export fresh recommendations to S3
+3. Glue crawler runs after export to update table partitions
+4. SPICE dataset refreshes on a daily schedule
+
+**Cost:**
+- Compute Optimizer export: free
+- S3 storage: ~5 MB/month parquet = $0.0001/month
+- Glue crawler: ~4 runs/month = $0.01/month
+- Athena scans: KB per query = effectively $0
+- **Total: < $0.02/month added**
+
+---
 
 #### Enterprise
 - Multi-cloud (Azure Cost Management, GCP Billing)
