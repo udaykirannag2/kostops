@@ -16,6 +16,8 @@ interface AgentStackProps extends cdk.StackProps {
   athenaResultsBucketName:    string;
   payerAccountId:             string;
   payerCrossAccountRoleArn:   string;
+  /** Bedrock model ID / inference profile (e.g. us.anthropic.claude-sonnet-4-5-20250929-v1:0) */
+  bedrockModelId?:            string;
 }
 
 /**
@@ -56,19 +58,39 @@ export class AgentStack extends cdk.Stack {
       description: 'Least-privilege role for KostOps Strands agent on AgentCore Runtime',
     });
 
-    // Bedrock: invoke Claude models
+    // Bedrock: invoke Claude models via cross-region inference profiles.
+    // Inference profiles route requests across multiple regions, so we must
+    // allow the foundation model resource in all possible target regions.
     agentRole.addToPolicy(new iam.PolicyStatement({
       sid:     'BedrockInvoke',
       actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'],
-      resources: [`arn:aws:bedrock:${this.region}::foundation-model/anthropic.claude-*`],
+      resources: [
+        // Foundation models across all regions a cross-region profile might route to
+        'arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-*',
+        'arn:aws:bedrock:us-east-2::foundation-model/anthropic.claude-*',
+        'arn:aws:bedrock:us-west-2::foundation-model/anthropic.claude-*',
+        'arn:aws:bedrock:eu-west-1::foundation-model/anthropic.claude-*',
+        'arn:aws:bedrock:eu-west-3::foundation-model/anthropic.claude-*',
+        'arn:aws:bedrock:eu-central-1::foundation-model/anthropic.claude-*',
+        'arn:aws:bedrock:ap-northeast-1::foundation-model/anthropic.claude-*',
+        'arn:aws:bedrock:ap-southeast-1::foundation-model/anthropic.claude-*',
+        'arn:aws:bedrock:ap-southeast-2::foundation-model/anthropic.claude-*',
+        // Cross-region inference profiles (us.*, eu.*, ap.*, global.*)
+        `arn:aws:bedrock:${this.region}:${this.account}:inference-profile/us.anthropic.claude-*`,
+        `arn:aws:bedrock:${this.region}:${this.account}:inference-profile/eu.anthropic.claude-*`,
+        `arn:aws:bedrock:${this.region}:${this.account}:inference-profile/ap.anthropic.claude-*`,
+        `arn:aws:bedrock:${this.region}:${this.account}:inference-profile/global.anthropic.claude-*`,
+      ],
     }));
 
-    // STS: assume payer cross-account role
-    agentRole.addToPolicy(new iam.PolicyStatement({
-      sid:       'AssumePayerRole',
-      actions:   ['sts:AssumeRole'],
-      resources: [props.payerCrossAccountRoleArn],
-    }));
+    // STS: assume payer cross-account role (only if configured)
+    if (props.payerCrossAccountRoleArn) {
+      agentRole.addToPolicy(new iam.PolicyStatement({
+        sid:       'AssumePayerRole',
+        actions:   ['sts:AssumeRole'],
+        resources: [props.payerCrossAccountRoleArn],
+      }));
+    }
 
     // Billing / Cost Management APIs (via payer cross-account role, but listed here for clarity)
     agentRole.addToPolicy(new iam.PolicyStatement({
@@ -170,15 +192,18 @@ export class AgentStack extends cdk.Stack {
           '--only-binary :all:',
           '--quiet',
           'strands-agents bedrock-agentcore',
-          // Remove runtime-provided / unnecessary packages
+          // Remove heavy Rust/.so packages that exceed 30s cold-start init
           '&& for pkg in boto3 botocore s3transfer jmespath urllib3 certifi six',
-          '                  cryptography cffi pycparser opentelemetry; do',
+          '                  cryptography cffi pycparser opentelemetry',
+          '                  pydantic pydantic_core pydantic_settings bedrock_agentcore',
+          '                  starlette uvicorn httpx httpcore h11 anyio sniffio',
+          '                  rpds jsonschema referencing click dotenv; do',
           '  rm -rf /asset-output/$pkg /asset-output/${pkg//-/_}',
           '  rm -rf /asset-output/${pkg}*.dist-info /asset-output/${pkg//-/_}*.dist-info',
           'done',
-          // Copy KostOps source files
+          // Copy KostOps source files (strands/ overrides pip-installed real package)
           '&& cp visibility_agent.py payer_role.py /asset-output/',
-          '&& cp -r tools mcp /asset-output/',
+          '&& cp -r tools mcp strands /asset-output/',
         ].join(' ')],
         // Mount the repo root so source files are accessible inside Docker
         volumes: [{
@@ -207,16 +232,25 @@ export class AgentStack extends cdk.Stack {
       ],
     });
 
-    // AgentCore control plane — create / update / delete / get / list
+    // AgentCore control plane — create / delete / get / list
+    // (no UpdateAgentRuntime — we use delete+create to avoid botocore shape issues)
     deployRole.addToPolicy(new iam.PolicyStatement({
       sid: 'AgentCoreControl',
       actions: [
         'bedrock-agentcore-control:CreateAgentRuntime',
-        'bedrock-agentcore-control:UpdateAgentRuntime',
         'bedrock-agentcore-control:DeleteAgentRuntime',
         'bedrock-agentcore-control:GetAgentRuntime',
         'bedrock-agentcore-control:ListAgentRuntimes',
       ],
+      resources: ['*'],
+    }));
+
+    // AgentCore data plane — full access for runtime lifecycle management
+    // (delete_agent_runtime triggers cascading sub-operations: DeleteWorkloadIdentity,
+    // DeleteAgentRuntimeEndpoint, etc. — grant * to avoid permission whack-a-mole)
+    deployRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'AgentCoreDataPlane',
+      actions: ['bedrock-agentcore:*'],
       resources: ['*'],
     }));
 
@@ -249,11 +283,28 @@ export class AgentStack extends cdk.Stack {
     }));
 
     // ── Custom Resource Lambda ─────────────────────────────────────────────────
+    //
+    // Bundle a newer boto3 alongside the Lambda code so the deploy Lambda has
+    // botocore >= 1.40 which knows the codeConfiguration shape for
+    // bedrock-agentcore-control create_agent_runtime.
+    // The Lambda runtime's bundled boto3 is older and serialises codeConfiguration
+    // as an unknown field, crashing with KeyError before the request is sent.
     const deployLambda = new lambda.Function(this, 'AgentCoreDeployFn', {
       functionName:  'kostops-agentcore-deploy',
       runtime:       lambda.Runtime.PYTHON_3_12,
       handler:       'agentcore_deploy.handler',
-      code:          lambda.Code.fromAsset('lambda'),
+      code:          lambda.Code.fromAsset(path.join(__dirname, '..', 'lambda'), {
+        bundling: {
+          local: new DeployLambdaBundler(),
+          image: cdk.DockerImage.fromRegistry(
+            'public.ecr.aws/docker/library/python:3.12-slim'
+          ),
+          command: ['bash', '-c', [
+            'pip install --target /asset-output --quiet boto3',
+            '&& cp /asset-input/*.py /asset-output/',
+          ].join(' ')],
+        },
+      }),
       role:          deployRole,
       timeout:       cdk.Duration.minutes(15),  // wait_for_active polls up to 12 min
       memorySize:    256,
@@ -290,7 +341,7 @@ export class AgentStack extends cdk.Stack {
         EnvAthenaResultsBucket: props.athenaResultsBucketName,
         EnvGlueDatabase:       'kostops_cur',
         EnvCurTable:           'data',
-        EnvBedrockModelId:     'anthropic.claude-sonnet-4-5-20250929-v1:0',
+        EnvBedrockModelId:     props.bedrockModelId ?? 'us.anthropic.claude-sonnet-4-5-20250929-v1:0',
         EnvPayerAccountId:     props.payerAccountId,
         EnvPayerRole:          props.payerCrossAccountRoleArn,
       },
@@ -312,7 +363,7 @@ export class AgentStack extends cdk.Stack {
           ATHENA_RESULTS_BUCKET:     props.athenaResultsBucketName,
           GLUE_DATABASE:             'kostops_cur',
           CUR_TABLE:                 'data',
-          BEDROCK_MODEL_ID:          'anthropic.claude-sonnet-4-5-20250929-v1:0',
+          BEDROCK_MODEL_ID:          props.bedrockModelId ?? 'us.anthropic.claude-sonnet-4-5-20250929-v1:0',
           PAYER_ACCOUNT_ID:          props.payerAccountId,
           PAYER_CROSS_ACCOUNT_ROLE:  props.payerCrossAccountRoleArn,
         },
@@ -352,7 +403,7 @@ class AgentCodeBundler implements cdk.ILocalBundling {
 
       // ── pip install ──────────────────────────────────────────────────────────
       const pip = spawnSync(
-        process.execPath,
+        'python3',
         [
           '-m', 'pip', 'install',
           '--target',          outputDir,
@@ -373,12 +424,31 @@ class AgentCodeBundler implements cdk.ILocalBundling {
 
       // ── Remove runtime-provided / unnecessary packages ─────────────────────
       // These are either pre-installed in the AgentCore Python 3.12 runtime or
-      // are large Rust extensions that blow out cold-start time.
+      // are large Rust/C extensions that blow out the 30s cold-start init timeout.
+      //
+      // pydantic_core's 4.1 MB ARM64 .so causes dlopen() to exceed 30s by itself.
+      // bedrock_agentcore, starlette, uvicorn etc. pull in pydantic_core and are
+      // not used by visibility_agent.py (it uses a pure stdlib HTTP server).
       const REMOVE = [
-        'boto3', 'botocore', 's3transfer', 'jmespath',
-        'urllib3', 'certifi', 'six',
-        'cryptography', 'cffi', 'pycparser',
-        'opentelemetry',
+        // Heavy Rust/C extensions — cause >30s cold-start (replaced by local stubs)
+        // NOTE: boto3/botocore are NOT removed — AgentCore does NOT pre-install them.
+        //       The agent's import boto3 would fail silently, the process would crash,
+        //       and AgentCore would time out waiting for GET /ping.
+        'pydantic', 'pydantic_core', 'pydantic_settings',
+        'bedrock_agentcore',
+        // Web frameworks not needed by the stdlib HTTP server
+        'starlette', 'uvicorn', 'httpx', 'httpcore', 'h11',
+        'anyio', 'sniffio', 'exceptiongroup',
+        // strands-agents: replaced by local lightweight stub in strands/
+        'strands', 'strands_agents',
+        // Other large/unused packages
+        'rpds', 'jsonschema', 'referencing', 'jsonschema_specifications',
+        'multipart', 'python_multipart', 'sse_starlette', 'httpx_sse',
+        'click', 'dotenv', 'python_dotenv',
+        'importlib_metadata', 'zipp',
+        // MCP SDK — not used by visibility_agent.py (stdlib HTTP server only)
+        // Removing it avoids transitively importing pydantic/starlette
+        'mcp',
       ];
 
       for (const pkg of REMOVE) {
@@ -410,7 +480,10 @@ class AgentCodeBundler implements cdk.ILocalBundling {
         }
       }
 
-      const DIRS = ['tools', 'mcp'];
+      // Copy local dirs — 'strands' MUST come after pip install to override the
+      // real strands-agents package with the lightweight stub that avoids
+      // pydantic_core / telemetry / Bedrock model imports on cold start.
+      const DIRS = ['tools', 'mcp', 'strands'];
       for (const d of DIRS) {
         const src = pt.join(repoRoot, d);
         if (fse.existsSync(src)) {
@@ -428,6 +501,39 @@ class AgentCodeBundler implements cdk.ILocalBundling {
     }
   }
 }
+
+// ── Deploy Lambda bundler — pip-installs a newer boto3 so codeConfiguration works ──
+class DeployLambdaBundler implements cdk.ILocalBundling {
+  tryBundle(outputDir: string): boolean {
+    const { spawnSync } = require('child_process');
+    const fse           = require('fs');
+    const pt            = require('path');
+    const lambdaDir     = pt.join(__dirname, '..', 'lambda');
+
+    try {
+      const pip = spawnSync(
+        'python3',
+        ['-m', 'pip', 'install', '--target', outputDir, '--quiet', 'boto3'],
+        { encoding: 'utf8', stdio: 'pipe' },
+      );
+      if (pip.status !== 0) {
+        console.error('[KostOps] deploy Lambda pip install failed:', pip.stderr);
+        return false;
+      }
+
+      for (const f of fse.readdirSync(lambdaDir)) {
+        if (f.endsWith('.py')) {
+          fse.copyFileSync(pt.join(lambdaDir, f), pt.join(outputDir, f));
+        }
+      }
+      return true;
+    } catch (err) {
+      console.error('[KostOps] deploy Lambda bundling failed:', err);
+      return false;
+    }
+  }
+}
+
 
 function _dirSizeMb(dir: string): number {
   const fse = require('fs');

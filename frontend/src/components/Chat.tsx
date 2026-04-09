@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { Send, Bot, User, Loader2, Sparkles, RotateCcw } from 'lucide-react';
 import clsx from 'clsx';
 import { sendMessage, getChatSession, listChatSessions } from '../api/client';
@@ -332,12 +333,14 @@ function MessageBubble({ message }: { message: Message }) {
             <p className="whitespace-pre-wrap">{message.content}</p>
           ) : (
             <ReactMarkdown
+              remarkPlugins={[remarkGfm]}
               components={{
                 p:      ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
                 ul:     ({ children }) => <ul className="list-disc list-inside mb-2 space-y-1">{children}</ul>,
                 ol:     ({ children }) => <ol className="list-decimal list-inside mb-2 space-y-1">{children}</ol>,
                 li:     ({ children }) => <li>{children}</li>,
                 strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
+                em:     ({ children }) => <em className="italic text-gray-600">{children}</em>,
                 code:   ({ children }) => (
                   <code className="bg-gray-200 text-gray-800 px-1.5 py-0.5 rounded text-xs font-mono">
                     {children}
@@ -347,6 +350,22 @@ function MessageBubble({ message }: { message: Message }) {
                   <pre className="bg-gray-200 rounded-lg p-3 overflow-x-auto text-xs font-mono my-2">
                     {children}
                   </pre>
+                ),
+                table:  ({ children }) => (
+                  <div className="overflow-x-auto my-2">
+                    <table className="w-full text-xs border-collapse">{children}</table>
+                  </div>
+                ),
+                thead:  ({ children }) => <thead>{children}</thead>,
+                tbody:  ({ children }) => <tbody>{children}</tbody>,
+                tr:     ({ children }) => <tr className="border-b border-gray-200 last:border-0">{children}</tr>,
+                th:     ({ children }) => (
+                  <th className="text-left font-semibold text-gray-700 pb-1.5 pr-4 border-b border-gray-300">
+                    {children}
+                  </th>
+                ),
+                td:     ({ children }) => (
+                  <td className="py-1 pr-4 text-gray-700">{children}</td>
                 ),
               }}
             >

@@ -31,13 +31,19 @@ import json
 import time
 import logging
 import boto3
+from botocore.config import Config
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 AWS_REGION = os.environ.get('AWS_REGION', 'us-east-1')
 
-_ctrl = boto3.client('bedrock-agentcore-control', region_name=AWS_REGION)
+# Disable client-side parameter validation: the Lambda runtime ships with an older
+# botocore that rejects codeConfiguration in create_agent_runtime, but the actual
+# API supports it. The serializer is fine; only the validator is wrong.
+_no_validate = Config(parameter_validation=False)
+
+_ctrl = boto3.client('bedrock-agentcore-control', region_name=AWS_REGION, config=_no_validate)
 _ssm  = boto3.client('ssm',                       region_name=AWS_REGION)
 _lam  = boto3.client('lambda',                    region_name=AWS_REGION)
 
@@ -51,7 +57,10 @@ def handler(event, context):
     props        = event['ResourceProperties']
 
     if request_type == 'Delete':
-        return _handle_delete(props)
+        # Pass the PhysicalResourceId so we delete the EXACT runtime CFN is cleaning up,
+        # not whatever runtime currently has the same name (avoids stale-delete race).
+        physical_id = event.get('PhysicalResourceId', '')
+        return _handle_delete(props, physical_id)
     else:
         return _handle_create_or_update(props)
 
@@ -73,7 +82,7 @@ def _handle_create_or_update(props: dict) -> dict:
         'GLUE_DATABASE':            props.get('EnvGlueDatabase',         'kostops_cur'),
         'CUR_TABLE':                props.get('EnvCurTable',             'data'),
         'BEDROCK_MODEL_ID':         props.get('EnvBedrockModelId',
-                                              'anthropic.claude-sonnet-4-5-20250929-v1:0'),
+                                              'us.anthropic.claude-sonnet-4-5-20250929-v1:0'),
         'PAYER_ACCOUNT_ID':         props.get('EnvPayerAccountId',       ''),
         'PAYER_CROSS_ACCOUNT_ROLE': props.get('EnvPayerRole',            ''),
     }
@@ -93,34 +102,26 @@ def _handle_create_or_update(props: dict) -> dict:
         }
     }
     network   = {'networkMode': 'PUBLIC'}
-    lifecycle = {
-        'idleRuntimeSessionTimeout': 300,   # 5 min idle → container cleanup
-        'maxLifetime':               3600,  # 1 hour max session
-    }
 
+    # Always delete-then-create: update_agent_runtime has boto3 serialization
+    # issues with codeConfiguration on older Lambda runtimes. Delete+create
+    # is idempotent, always deploys the latest code, and avoids the issue.
     existing = _find_runtime(agent_name)
-
     if existing:
         runtime_id = existing['agentRuntimeId']
-        logger.info(f"Updating AgentCore Runtime: {agent_name} ({runtime_id})")
-        resp = _ctrl.update_agent_runtime(
-            agentRuntimeId=         runtime_id,
-            agentRuntimeArtifact=   artifact,
-            roleArn=                role_arn,
-            networkConfiguration=   network,
-            lifecycleConfiguration= lifecycle,
-            environmentVariables=   env_vars,
-        )
-    else:
-        logger.info(f"Creating AgentCore Runtime: {agent_name}")
-        resp = _ctrl.create_agent_runtime(
-            agentRuntimeName=       agent_name,
-            agentRuntimeArtifact=   artifact,
-            roleArn=                role_arn,
-            networkConfiguration=   network,
-            lifecycleConfiguration= lifecycle,
-            environmentVariables=   env_vars,
-        )
+        logger.info(f"Deleting AgentCore Runtime for code replacement: {agent_name} ({runtime_id})")
+        _ctrl.delete_agent_runtime(agentRuntimeId=runtime_id)
+        _wait_for_deleted(runtime_id)
+        logger.info(f"Runtime name '{agent_name}' is free")
+
+    logger.info(f"Creating AgentCore Runtime: {agent_name}")
+    resp = _ctrl.create_agent_runtime(
+        agentRuntimeName=     agent_name,
+        agentRuntimeArtifact= artifact,
+        roleArn=              role_arn,
+        networkConfiguration= network,
+        environmentVariables= env_vars,
+    )
 
     runtime_id  = resp['agentRuntimeId']
     runtime_arn = resp['agentRuntimeArn']
@@ -154,21 +155,25 @@ def _handle_create_or_update(props: dict) -> dict:
 
 # ── Delete ────────────────────────────────────────────────────────────────────
 
-def _handle_delete(props: dict) -> dict:
-    agent_name = props['AgentName']
-    logger.info(f"Deleting AgentCore Runtime: {agent_name}")
+def _handle_delete(props: dict, physical_id: str = '') -> dict:
+    agent_name = props.get('AgentName', '')
+    # Use the exact physical resource ID (runtime ID like kostopsVisibilityAgent-ABC123)
+    # rather than searching by name. This prevents stale CFN rollback deletes from
+    # killing the runtime that was just deployed by a successful newer update.
+    runtime_id = physical_id if '-' in (physical_id or '') else ''
+    logger.info(f"Deleting AgentCore Runtime | physicalResourceId={physical_id!r} | name={agent_name}")
     try:
-        existing = _find_runtime(agent_name)
-        if existing:
-            _ctrl.delete_agent_runtime(agentRuntimeId=existing['agentRuntimeId'])
-            logger.info(f"Delete initiated for runtime: {existing['agentRuntimeId']}")
+        if runtime_id:
+            # Delete the specific runtime ID that CFN tracked for this resource
+            _ctrl.delete_agent_runtime(agentRuntimeId=runtime_id)
+            logger.info(f"Delete initiated for runtime: {runtime_id}")
         else:
-            logger.info("Runtime not found — nothing to delete")
+            logger.info("No valid physical runtime ID — nothing to delete")
     except Exception as e:
         # Non-fatal: let CDK stack deletion continue even if runtime is already gone
         logger.warning(f"Delete runtime failed (non-fatal): {e}")
 
-    return {'PhysicalResourceId': props.get('AgentName', 'kostops-agent')}
+    return {'PhysicalResourceId': physical_id or agent_name}
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -187,6 +192,29 @@ def _find_runtime(name: str) -> dict | None:
         token = resp.get('nextToken')
         if not token:
             return None
+
+
+def _wait_for_deleted(runtime_id: str, timeout_seconds: int = 120) -> None:
+    """Poll until the runtime is gone (ResourceNotFoundException = deletion complete)."""
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        try:
+            resp   = _ctrl.get_agent_runtime(agentRuntimeId=runtime_id)
+            status = resp.get('status', '')
+            logger.info(f"  Delete status: {status}")
+            if status.upper() in ('DELETED',):
+                return
+            time.sleep(5)
+        except _ctrl.exceptions.ResourceNotFoundException:
+            logger.info(f"Runtime {runtime_id} no longer found — deletion complete")
+            return
+        except Exception as e:
+            # Treat any 404-like error as gone
+            if 'not found' in str(e).lower() or 'ResourceNotFound' in str(type(e)):
+                logger.info(f"Runtime {runtime_id} gone: {e}")
+                return
+            raise
+    logger.warning(f"Timed out waiting for deletion of {runtime_id}")
 
 
 def _wait_for_active(runtime_id: str, timeout_seconds: int = 720) -> None:
@@ -213,16 +241,17 @@ def _wait_for_active(runtime_id: str, timeout_seconds: int = 720) -> None:
 
 
 def _update_chat_handler_arn(runtime_arn: str) -> None:
-    """Update the chat-handler Lambda env var with the new runtime ARN."""
-    try:
-        lam_resp = _lam.get_function_configuration(FunctionName='kostops-chat-handler')
-        env      = lam_resp.get('Environment', {}).get('Variables', {})
-        env['AGENT_RUNTIME_ARN'] = runtime_arn
-        _lam.update_function_configuration(
-            FunctionName = 'kostops-chat-handler',
-            Environment  = {'Variables': env},
-        )
-        logger.info("chat-handler Lambda AGENT_RUNTIME_ARN updated")
-    except Exception as e:
-        # Non-fatal — keepwarm will still work via SSM
-        logger.warning(f"Could not update chat-handler env var: {e}")
+    """Update all agent-calling Lambdas with the new runtime ARN."""
+    for fn in ['kostops-chat-handler', 'kostops-slack-command-handler']:
+        try:
+            lam_resp = _lam.get_function_configuration(FunctionName=fn)
+            env      = lam_resp.get('Environment', {}).get('Variables', {})
+            env['AGENT_RUNTIME_ARN'] = runtime_arn
+            _lam.update_function_configuration(
+                FunctionName = fn,
+                Environment  = {'Variables': env},
+            )
+            logger.info(f"{fn} AGENT_RUNTIME_ARN updated to {runtime_arn}")
+        except Exception as e:
+            # Non-fatal — Slack handler reads from SSM at runtime anyway
+            logger.warning(f"Could not update {fn} env var: {e}")

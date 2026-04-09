@@ -4,8 +4,7 @@
  */
 
 import { fetchAuthSession } from 'aws-amplify/auth';
-
-const API_URL = import.meta.env.VITE_API_URL as string;
+import { getRuntimeConfig } from '../runtimeConfig';
 
 async function getToken(): Promise<string> {
   const session = await fetchAuthSession();
@@ -18,9 +17,9 @@ async function apiFetch<T>(
   path:    string,
   options: RequestInit = {},
 ): Promise<T> {
-  const token = await getToken();
+  const [token, { apiUrl }] = await Promise.all([getToken(), getRuntimeConfig()]);
 
-  const response = await fetch(`${API_URL}${path}`, {
+  const response = await fetch(`${apiUrl}${path}`, {
     ...options,
     headers: {
       'Content-Type':  'application/json',
@@ -190,4 +189,31 @@ export interface MonthlySpendResponse {
 
 export function getMonthlySpend(): Promise<MonthlySpendResponse> {
   return apiFetch<MonthlySpendResponse>('/dashboard/monthly-spend');
+}
+
+// ── QuickSight embed ──────────────────────────────────────────────────────────
+
+export type DashboardKey =
+  | 'overview'
+  | 'billing-summary'
+  | 'compute'
+  | 'storage'
+  | 'ai-ml'
+  | 'commitments'
+  | 'rightsizing';
+
+export interface QuickSightEmbedResponse {
+  configured:   boolean;
+  embedUrl?:    string;
+  expiresInMs?: number;
+  message?:     string;
+  error?:       string;
+}
+
+export function getQuickSightEmbedUrl(
+  dashboard: DashboardKey = 'overview',
+): Promise<QuickSightEmbedResponse> {
+  return apiFetch<QuickSightEmbedResponse>(
+    `/dashboard/quicksight-url?dashboard=${dashboard}`,
+  );
 }

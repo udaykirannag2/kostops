@@ -21,6 +21,18 @@ const adminEmail               = app.node.tryGetContext('adminEmail')           
 const payerAccountId           = app.node.tryGetContext('payerAccountId')           ?? '';
 const payerCrossAccountRoleArn = app.node.tryGetContext('payerCrossAccountRoleArn') ?? '';
 
+// Bedrock model ID — defaults to the cross-region inference profile for the
+// deployment region.  Override with:
+//   cdk deploy --context bedrockModelId=us.anthropic.claude-sonnet-4-5-20250929-v1:0
+// Available prefixes: us.* (us-east-1/2, us-west-2), eu.* (eu-west-1/3, eu-central-1),
+//                     ap.* (ap-northeast-1, ap-southeast-1/2)
+const deployRegion = process.env.CDK_DEFAULT_REGION ?? 'us-east-1';
+const regionPrefix = deployRegion.startsWith('eu-') ? 'eu'
+                   : deployRegion.startsWith('ap-') ? 'ap'
+                   : 'us';
+const defaultModelId = `${regionPrefix}.anthropic.claude-sonnet-4-5-20250929-v1:0`;
+const bedrockModelId = app.node.tryGetContext('bedrockModelId') ?? defaultModelId;
+
 // Validate required payer context
 if (!payerAccountId || !payerCrossAccountRoleArn || !payerCurBucketName) {
   console.warn(
@@ -48,6 +60,7 @@ const agentStack = new AgentStack(app, 'KostOpsAgentStack', {
   athenaResultsBucketName:   dataStack.athenaResultsBucketName,
   payerAccountId,
   payerCrossAccountRoleArn,
+  bedrockModelId,
 });
 agentStack.addDependency(authStack);
 agentStack.addDependency(dataStack);

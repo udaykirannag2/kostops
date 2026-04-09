@@ -382,7 +382,10 @@ export default function Integrations() {
   const [error,        setError]        = useState('');
   const [selected,     setSelected]     = useState<Integration | null>(null);
 
-  const apiUrl = (import.meta.env.VITE_API_URL as string) ?? '';
+  const [apiUrl, setApiUrl] = useState('');
+  useEffect(() => {
+    import('../runtimeConfig').then(m => m.getRuntimeConfig()).then(c => setApiUrl(c.apiUrl)).catch(() => {});
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
