@@ -135,17 +135,17 @@ export class FrontendStack extends cdk.Stack {
     });
 
     // ── Write runtime-config.json ─────────────────────────────────────────────
-    // Uses REAL string values (not CDK tokens) to avoid any CFN cross-stack
-    // Fn::ImportValue dependency.  The AwsCustomResource Lambda puts the JSON
-    // file directly into S3 — no CFN export/import involved.
+    // Uses REAL string values (not CDK tokens) to avoid CFN cross-stack
+    // Fn::ImportValue dependencies that break when upstream stacks redeploy.
     //
-    // If resolved values are placeholders (first deploy, stacks not yet up),
-    // the file is still written with those placeholders.  A second `cdk deploy
-    // KostOpsFrontendStack` after AuthStack + ApiStack are deployed will fix it.
+    // First deploy (hasRealValues=false): backend stacks don't exist yet at
+    // synthesis time so we can't write the config.  A second `cdk deploy --all`
+    // will find the real values and write it.  A CfnOutput tells the customer.
+    //
+    // All subsequent deploys (hasRealValues=true): config is always refreshed.
     if (resolved.hasRealValues) {
       new cr.AwsCustomResource(this, 'RuntimeConfigDeployment', {
         resourceType: 'Custom::RuntimeConfig',
-        // Update on every deploy so config stays current
         onUpdate: {
           service:   'S3',
           action:    'putObject',
@@ -154,17 +154,14 @@ export class FrontendStack extends cdk.Stack {
             Key:          'runtime-config.json',
             ContentType:  'application/json',
             CacheControl: 'no-store, no-cache, must-revalidate',
-            // Plain JSON string — no CDK tokens, no CFN Fn::ImportValue
             Body: JSON.stringify({
               userPoolId:       resolved.userPoolId,
               userPoolClientId: resolved.userPoolClientId,
               apiUrl:           resolved.apiUrl,
             }),
           },
-          physicalResourceId: cr.PhysicalResourceId.of(
-            // Change every deploy so the file is always refreshed
-            `runtime-config-${resolved.userPoolId}`
-          ),
+          // physicalResourceId includes the poolId so it updates whenever config changes
+          physicalResourceId: cr.PhysicalResourceId.of(`runtime-config-${resolved.userPoolId}`),
         },
         onDelete: {
           service:    'S3',
@@ -179,21 +176,27 @@ export class FrontendStack extends cdk.Stack {
           }),
         ]),
       }).node.addDependency(siteBucket);
-    } else {
-      console.warn('[KostOps] Skipping runtime-config.json: AuthStack/ApiStack not yet deployed.');
-      console.warn('[KostOps] After deploying those stacks, re-run: cdk deploy KostOpsFrontendStack');
     }
 
     this.siteUrl = `https://${distribution.distributionDomainName}`;
 
     new cdk.CfnOutput(this, 'SiteUrl', {
-      value: this.siteUrl,
+      value:       resolved.hasRealValues ? this.siteUrl : '(not ready yet — see NextStep below)',
       description: 'KostOps UI — open this in your browser',
     });
     new cdk.CfnOutput(this, 'DistributionId', {
       value:       distribution.distributionId,
-      description: 'CloudFront distribution ID (for manual cache invalidation)',
+      description: 'CloudFront distribution ID',
     });
+
+    // On first deploy, backend stacks don't exist yet at synthesis time so
+    // runtime-config.json can't be written.  Show a clear next-step output.
+    if (!resolved.hasRealValues) {
+      new cdk.CfnOutput(this, 'NextStep', {
+        value:       'Run `npx cdk deploy --all` one more time to finalize frontend config',
+        description: 'Step 1 of 2 complete — run cdk deploy --all again to finish setup',
+      });
+    }
   }
 }
 
@@ -250,15 +253,22 @@ function _resolveFromCfn(props: FrontendStackProps): ResolvedConfig {
   );
 
   if (hasRealValues) {
-    console.log(`[KostOps] Resolved config — UserPoolId: ${userPoolId} | ApiUrl: ${apiUrl}`);
+    // Step 2 of 2 (or any incremental deploy)
+    console.log('\n[KostOps] ✅  Step 2 of 2 — writing frontend runtime config');
+    console.log(`[KostOps]    UserPoolId : ${userPoolId}`);
+    console.log(`[KostOps]    ApiUrl     : ${apiUrl}\n`);
   } else {
-    console.warn(
-      '\n[KostOps] WARNING: Could not resolve Cognito/API values from CloudFormation.\n' +
-      '  Deploy in order:\n' +
-      '    cdk deploy KostOpsAuthStack KostOpsDataStack KostOpsAgentStack KostOpsApiStack\n' +
-      '    cdk deploy KostOpsFrontendStack\n' +
-      '  Ensure AWS_PROFILE / AWS_DEFAULT_REGION match your deployment account.\n',
-    );
+    // Step 1 of 2 — backend stacks not yet deployed
+    console.log('\n[KostOps] ──────────────────────────────────────────────────────');
+    console.log('[KostOps]  INITIAL SETUP — Step 1 of 2');
+    console.log('[KostOps]  All infrastructure will be created now.');
+    console.log('[KostOps]  When this deploy finishes, run:');
+    console.log('[KostOps]');
+    console.log('[KostOps]    npx cdk deploy --all');
+    console.log('[KostOps]');
+    console.log('[KostOps]  That second run writes the frontend config and');
+    console.log('[KostOps]  the site URL will be ready to open.');
+    console.log('[KostOps] ──────────────────────────────────────────────────────\n');
   }
 
   return { userPoolId, userPoolClientId, apiUrl, hasRealValues };
