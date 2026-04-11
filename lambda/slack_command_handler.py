@@ -39,11 +39,22 @@ logger                = logging.getLogger()
 logger.setLevel(os.environ.get('LOG_LEVEL', 'INFO'))
 
 SLACK_SIGNING_SECRET  = os.environ.get('SLACK_SIGNING_SECRET', '')
-AGENT_RUNTIME_ARN     = os.environ.get('AGENT_RUNTIME_ARN', '')
 AWS_REGION            = os.environ.get('AWS_REGION', 'us-east-1')
+SSM_AGENT_ARN_KEY     = '/kostops/agent-runtime-arn'
 
-_lambda = boto3.client('lambda', region_name=AWS_REGION)
-_agent  = boto3.client('bedrock-agentcore', region_name=AWS_REGION)
+_lambda = boto3.client('lambda',               region_name=AWS_REGION)
+_agent  = boto3.client('bedrock-agentcore',    region_name=AWS_REGION)
+_ssm    = boto3.client('ssm',                  region_name=AWS_REGION)
+
+
+def _get_agent_runtime_arn() -> str:
+    """Read the current AgentCore runtime ARN from SSM.
+    Falls back to env var so local/CDK deploys still work without SSM."""
+    try:
+        resp = _ssm.get_parameter(Name=SSM_AGENT_ARN_KEY)
+        return resp['Parameter']['Value']
+    except Exception:
+        return os.environ.get('AGENT_RUNTIME_ARN', '')
 
 
 # ── Signature verification ────────────────────────────────────────────────────
@@ -127,17 +138,27 @@ def _post_to_slack(response_url: str, text: str, is_error: bool = False) -> None
 def _invoke_agent(question: str, response_url: str, user_name: str) -> None:
     """Call the AgentCore Runtime and post the result back to Slack."""
     import uuid
-    session_id = str(uuid.uuid4())
+    session_id        = str(uuid.uuid4())
+    agent_runtime_arn = _get_agent_runtime_arn()
+    logger.info(f'Using AgentCore ARN: {agent_runtime_arn}')
 
     try:
         response = _agent.invoke_agent_runtime(
-            agentRuntimeArn=AGENT_RUNTIME_ARN,
+            agentRuntimeArn=agent_runtime_arn,
             runtimeSessionId=session_id,
             payload=json.dumps({'inputText': question}).encode('utf-8'),
+            contentType='application/json',
+            accept='application/json',
         )
-        body    = response['body'].read() if hasattr(response.get('body', ''), 'read') else response.get('body', b'{}')
-        decoded = json.loads(body) if isinstance(body, (bytes, str)) else body
-        answer  = decoded.get('output') or decoded.get('text') or 'No response from agent.'
+        raw     = response['response'].read()
+        decoded = json.loads(raw.decode('utf-8'))
+        answer  = (
+            decoded.get('output')
+            or decoded.get('completion')
+            or decoded.get('outputText')
+            or decoded.get('text')
+            or str(decoded)
+        )
     except Exception as e:
         logger.error(f'Agent invocation failed: {e}')
         answer  = f'❌ Agent error: {e}'
@@ -186,7 +207,7 @@ def handler(event: dict, context) -> dict:
             'Example: `/kostops what are my top 3 cost drivers this month?`'
         )
 
-    if not AGENT_RUNTIME_ARN:
+    if not _get_agent_runtime_arn():
         return _ack('❌ Agent not configured. Contact your KostOps admin.')
 
     # Invoke self asynchronously so we can ACK Slack within 3s
@@ -206,4 +227,4 @@ def handler(event: dict, context) -> dict:
         return _ack(f'❌ Failed to start agent: {e}')
 
     # ACK Slack immediately — agent result will arrive via response_url
-    return _ack(f'🔍 Looking into that for you, <@{user_name}>…')
+    return _ack('⏳ Analysing your AWS cost data, this may take a few seconds…')

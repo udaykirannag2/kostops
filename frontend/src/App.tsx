@@ -1,98 +1,67 @@
-import { } from 'react';
-import { BrowserRouter, Routes, Route, NavLink, Navigate } from 'react-router-dom';
-import { MessageSquare, AlertTriangle, LogOut, TrendingDown, LayoutDashboard, Puzzle } from 'lucide-react';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import type { AuthUser } from 'aws-amplify/auth';
-import clsx from 'clsx';
+import AppShell from './components/layout/AppShell';
+import EmbedPage from './components/cost/EmbedPage';
 import Chat from './components/Chat';
 import Findings from './components/Findings';
-import Dashboard from './components/Dashboard';
 import Integrations from './components/Integrations';
+import PlaceholderFromNav from './pages/PlaceholderFromNav';
 
 interface AppProps {
   signOut?: () => void;
-  user?:    AuthUser;
+  user?: AuthUser;
 }
 
 export default function App({ signOut, user }: AppProps) {
-  const email = (user?.signInDetails?.loginId ?? 'User').split('@')[0];
+  const email = user?.signInDetails?.loginId ?? 'user@example.com';
 
   return (
     <BrowserRouter>
-      <div className="flex h-screen bg-gray-50 font-sans">
+      <Routes>
+        <Route element={<AppShell userEmail={email} signOut={signOut} />}>
+          <Route index element={<Navigate to="/visibility/billing-summary" replace />} />
 
-        {/* ── Sidebar ──────────────────────────────────────────────────────── */}
-        <aside className="w-56 flex-shrink-0 bg-gray-900 flex flex-col">
+          {/* Cost Visibility */}
+          <Route path="/visibility/billing-summary" element={<EmbedPage dashboard="billing-summary" />} />
+          <Route path="/visibility/compute"         element={<EmbedPage dashboard="compute" />} />
+          <Route path="/visibility/storage"         element={<EmbedPage dashboard="storage" />} />
+          <Route path="/visibility/ai-ml"           element={<EmbedPage dashboard="ai-ml" />} />
 
-          {/* Logo */}
-          <div className="px-5 py-5 border-b border-gray-800">
-            <div className="flex items-center gap-2">
-              <TrendingDown className="text-brand-500" size={20} />
-              <span className="text-white font-bold text-lg tracking-tight">KostOps</span>
-            </div>
-            <p className="text-gray-500 text-xs mt-0.5">AWS FinOps Agent</p>
-          </div>
+          {/* Optimization */}
+          <Route path="/optimization/opportunities"         element={<Findings />} />
+          <Route path="/optimization/coverage-commitments"  element={<EmbedPage dashboard="commitments" />} />
+          <Route path="/optimization/rightsizing"           element={<EmbedPage dashboard="rightsizing" />} />
+          <Route path="/optimization/savings-tracker"       element={<PlaceholderFromNav />} />
+          <Route path="/optimization/recommendations"       element={<PlaceholderFromNav />} />
 
-          {/* Nav */}
-          <nav className="flex-1 px-3 py-4 space-y-1">
-            <SidebarLink to="/dashboard"    icon={<LayoutDashboard size={16} />} label="Dashboard" />
-            <SidebarLink to="/chat"         icon={<MessageSquare  size={16} />} label="Chat" />
-            <SidebarLink to="/findings"     icon={<AlertTriangle  size={16} />} label="Findings" />
-            <SidebarLink to="/integrations" icon={<Puzzle         size={16} />} label="Integrations" />
-          </nav>
+          {/* Integrations */}
+          <Route path="/integrations/cloud-accounts" element={<PlaceholderFromNav />} />
+          <Route path="/integrations/data-sources"   element={<PlaceholderFromNav />} />
+          <Route path="/integrations/destinations"   element={<PlaceholderFromNav />} />
+          <Route path="/integrations/connectors"     element={<Integrations />} />
 
-          {/* User */}
-          <div className="px-4 py-4 border-t border-gray-800">
-            <div className="flex items-center justify-between">
-              <div className="min-w-0">
-                <p className="text-gray-300 text-sm font-medium truncate">{email}</p>
-                <p className="text-gray-600 text-xs">Engineer</p>
-              </div>
-              <button
-                onClick={signOut}
-                className="text-gray-500 hover:text-gray-300 transition-colors p-1 rounded"
-                title="Sign out"
-              >
-                <LogOut size={15} />
-              </button>
-            </div>
-          </div>
-        </aside>
+          {/* Assistant */}
+          <Route path="/assistant/chat"      element={<Chat />} />
+          <Route path="/assistant/playbooks" element={<PlaceholderFromNav />} />
+          <Route path="/assistant/history"   element={<PlaceholderFromNav />} />
 
-        {/* ── Main content ─────────────────────────────────────────────────── */}
-        <main className="flex-1 min-w-0 flex flex-col overflow-hidden">
-          <Routes>
-            <Route path="/"             element={<Navigate to="/dashboard" replace />} />
-            <Route path="/dashboard"    element={<Dashboard />} />
-            <Route path="/chat"         element={<Chat />} />
-            <Route path="/findings"     element={<Findings />} />
-            <Route path="/integrations" element={<Integrations />} />
-          </Routes>
-        </main>
+          {/* Admin */}
+          <Route path="/admin/workspace"   element={<PlaceholderFromNav />} />
+          <Route path="/admin/users-roles" element={<PlaceholderFromNav />} />
+          <Route path="/admin/policies"    element={<PlaceholderFromNav />} />
+          <Route path="/admin/settings"    element={<PlaceholderFromNav />} />
+        </Route>
 
-      </div>
+        {/* Legacy redirects */}
+        <Route path="/dashboard"                  element={<Navigate to="/visibility/billing-summary"   replace />} />
+        <Route path="/visibility/overview"        element={<Navigate to="/visibility/billing-summary"   replace />} />
+        <Route path="/findings"                   element={<Navigate to="/optimization/opportunities"   replace />} />
+        <Route path="/chat"                       element={<Navigate to="/assistant/chat"               replace />} />
+        <Route path="/integrations"               element={<Navigate to="/integrations/connectors"      replace />} />
+        <Route path="/visibility/cost-analytics"  element={<Navigate to="/visibility/billing-summary"   replace />} />
+
+        <Route path="*" element={<Navigate to="/visibility/billing-summary" replace />} />
+      </Routes>
     </BrowserRouter>
-  );
-}
-
-function SidebarLink({
-  to, icon, label,
-}: {
-  to: string; icon: React.ReactNode; label: string;
-}) {
-  return (
-    <NavLink
-      to={to}
-      className={({ isActive }) =>
-        clsx(
-          'flex items-center gap-2.5 px-3 py-2 rounded-md text-sm font-medium transition-colors',
-          isActive
-            ? 'bg-brand-600 text-white'
-            : 'text-gray-400 hover:text-white hover:bg-gray-800',
-        )
-      }
-    >
-      {icon}
-      {label}
-    </NavLink>
   );
 }

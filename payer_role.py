@@ -36,10 +36,22 @@ _credentials_expiry: float = 0
 
 def get_payer_session() -> boto3.Session:
     """
-    Return a boto3 Session using credentials from the payer cross-account role.
-    Credentials are cached and refreshed automatically when they expire.
-    Raises ValueError if PAYER_CROSS_ACCOUNT_ROLE is not configured.
+    Return a boto3 Session with billing API credentials.
+
+    If PAYER_CROSS_ACCOUNT_ROLE is configured, assumes the cross-account role
+    so Cost Explorer / Budgets return consolidated org-wide data.
+
+    If not configured (single-account setup), falls back to the current execution
+    credentials — Cost Explorer will return data for this account only, which is
+    still useful when running in a standalone / single-account deployment.
     """
+    if not PAYER_CROSS_ACCOUNT_ROLE:
+        logger.info(
+            'PAYER_CROSS_ACCOUNT_ROLE not set — using local execution credentials. '
+            'Cost Explorer will return data for this account only.'
+        )
+        return boto3.Session(region_name=os.environ.get('AWS_REGION', 'us-east-1'))
+
     creds = _assume_payer_role()
     return boto3.Session(
         aws_access_key_id=     creds['AccessKeyId'],
@@ -52,8 +64,10 @@ def get_payer_session() -> boto3.Session:
 def get_payer_credentials() -> dict[str, str]:
     """
     Return env-style credentials dict for injecting into MCP server subprocess.
-    Used by AgentCore Gateway to pass payer credentials to the billing MCP server.
+    Falls back to empty dict (ambient credentials) when no role is configured.
     """
+    if not PAYER_CROSS_ACCOUNT_ROLE:
+        return {'AWS_REGION': os.environ.get('AWS_REGION', 'us-east-1')}
     creds = _assume_payer_role()
     return {
         'AWS_ACCESS_KEY_ID':     creds['AccessKeyId'],
