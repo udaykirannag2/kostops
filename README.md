@@ -4,6 +4,24 @@ A self-hosted AWS FinOps agent that runs entirely in your AWS account.
 Deploy it, connect your billing data, savings opportunities and Agentic AI to analyze and take actions.
 Pay AWS for compute. Pay nobody else.
 
+🌐 **Website**: [kostops.com](https://kostops.com) | 🎬 **Demo**: [Watch on YouTube](https://youtu.be/c45qbWEdTcs)
+
+---
+
+## Screenshots
+
+### AI Chat Agent
+Ask questions about your AWS spend in plain English — directly in the web UI or via Slack.
+
+![KostOps Chat UI](docs/screenshots/chat-ui.png)
+
+### Billing Summary Dashboard
+QuickSight-powered cost visibility: invoice spend by account, blended costs, and charge type breakdown.
+
+![KostOps Billing Dashboard](docs/screenshots/billing-dashboard.png)
+
+---
+
 ## What it does
 
 - Visibility — daily spend by service, account, tag, and resource

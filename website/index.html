@@ -1,0 +1,886 @@
+<!DOCTYPE html>
+<html lang="en" class="scroll-smooth">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>KostOps — AI-Native AWS Cost Intelligence</title>
+  <meta name="description" content="KostOps deploys into your AWS account in 20 minutes. Chat with your Cost & Usage data, get ranked savings opportunities, and get alerts in Slack — all without leaving your infrastructure." />
+
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            navy:    { DEFAULT: '#0F172A', light: '#1E293B', lighter: '#334155' },
+            aws:     { DEFAULT: '#FF9900', dark: '#CC7A00' },
+            electric: { DEFAULT: '#38BDF8', dark: '#0EA5E9' },
+          },
+          fontFamily: {
+            sans: ['Inter', 'system-ui', 'sans-serif'],
+            mono: ['JetBrains Mono', 'Fira Code', 'monospace'],
+          },
+        },
+      },
+    }
+  </script>
+
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+
+  <!-- EmailJS -->
+  <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
+
+  <style>
+    html { font-family: 'Inter', system-ui, sans-serif; }
+
+    .gradient-text {
+      background: linear-gradient(135deg, #FF9900 0%, #38BDF8 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .hero-glow {
+      background: radial-gradient(ellipse 80% 50% at 50% -10%, rgba(56, 189, 248, 0.15), transparent);
+    }
+
+    .card-hover {
+      transition: transform 0.2s ease, box-shadow 0.2s ease;
+    }
+    .card-hover:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 20px 40px rgba(0,0,0,0.3);
+    }
+
+    .terminal {
+      background: #0D1117;
+      border: 1px solid #30363D;
+      border-radius: 12px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.85rem;
+      line-height: 1.7;
+    }
+    .terminal .prompt  { color: #58A6FF; }
+    .terminal .user    { color: #3FB950; }
+    .terminal .agent   { color: #E6EDF3; }
+    .terminal .dollars { color: #FF9900; }
+    .terminal .dim     { color: #8B949E; }
+
+    .step-line::before {
+      content: '';
+      position: absolute;
+      left: 19px;
+      top: 44px;
+      bottom: -20px;
+      width: 2px;
+      background: linear-gradient(to bottom, #38BDF8, transparent);
+    }
+
+    /* Smooth scroll offset for fixed nav */
+    section[id] { scroll-margin-top: 72px; }
+  </style>
+</head>
+
+<body class="bg-navy text-slate-200 antialiased">
+
+  <!-- ─── NAVBAR ──────────────────────────────────────────────────────────── -->
+  <nav class="fixed top-0 left-0 right-0 z-50 border-b border-slate-800 bg-navy/90 backdrop-blur-sm">
+    <div class="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
+      <a href="#" class="flex items-center gap-2 text-white font-bold text-lg tracking-tight">
+        <span class="text-aws text-2xl">⬡</span>
+        KostOps
+      </a>
+      <div class="hidden md:flex items-center gap-8 text-sm font-medium text-slate-400">
+        <a href="#features"         class="hover:text-white transition-colors">Features</a>
+        <a href="#differentiation"  class="hover:text-white transition-colors">Why KostOps</a>
+        <a href="#demo"             class="hover:text-white transition-colors">Demo</a>
+        <a href="#how-it-works"     class="hover:text-white transition-colors">How It Works</a>
+        <a href="#advantages"       class="hover:text-white transition-colors">Compare</a>
+        <a href="#contact"          class="hover:text-white transition-colors">Contact</a>
+      </div>
+      <a href="#contact"
+         class="hidden md:inline-flex items-center gap-2 bg-aws hover:bg-aws-dark text-navy font-semibold text-sm px-4 py-2 rounded-lg transition-colors">
+        Get Started
+      </a>
+      <!-- Mobile menu button (simple toggle) -->
+      <button id="mobile-menu-btn" class="md:hidden text-slate-400 hover:text-white" aria-label="Open menu">
+        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" />
+        </svg>
+      </button>
+    </div>
+    <!-- Mobile menu -->
+    <div id="mobile-menu" class="hidden md:hidden border-t border-slate-800 bg-navy px-6 py-4 flex flex-col gap-4 text-sm font-medium text-slate-400">
+      <a href="#features"        class="hover:text-white" onclick="closeMobileMenu()">Features</a>
+      <a href="#differentiation" class="hover:text-white" onclick="closeMobileMenu()">Why KostOps</a>
+      <a href="#demo"            class="hover:text-white" onclick="closeMobileMenu()">Demo</a>
+      <a href="#how-it-works"    class="hover:text-white" onclick="closeMobileMenu()">How It Works</a>
+      <a href="#advantages"      class="hover:text-white" onclick="closeMobileMenu()">Compare</a>
+      <a href="#contact"         class="hover:text-white" onclick="closeMobileMenu()">Contact</a>
+      <a href="#contact" class="bg-aws text-navy font-semibold px-4 py-2 rounded-lg text-center" onclick="closeMobileMenu()">Get Started</a>
+    </div>
+  </nav>
+
+  <!-- ─── HERO ─────────────────────────────────────────────────────────────── -->
+  <section class="relative pt-32 pb-20 px-6 hero-glow overflow-hidden">
+    <!-- Background grid -->
+    <div class="absolute inset-0 opacity-5"
+         style="background-image: linear-gradient(#38BDF8 1px, transparent 1px), linear-gradient(90deg, #38BDF8 1px, transparent 1px);
+                background-size: 60px 60px;"></div>
+
+    <div class="relative max-w-6xl mx-auto">
+      <div class="max-w-3xl">
+        <!-- Badge -->
+        <div class="inline-flex items-center gap-2 bg-slate-800 border border-slate-700 rounded-full px-4 py-1.5 text-xs font-medium text-slate-300 mb-6">
+          <span class="w-2 h-2 rounded-full bg-green-400 animate-pulse"></span>
+          Deploys in your AWS account — your data never leaves
+        </div>
+
+        <h1 class="text-4xl md:text-6xl font-extrabold text-white leading-tight tracking-tight mb-6">
+          Pay AWS for compute.<br />
+          <span class="gradient-text">Pay nobody else.</span>
+        </h1>
+
+        <p class="text-lg md:text-xl text-slate-400 leading-relaxed mb-8 max-w-2xl">
+          KostOps is the open-source, self-hosted FinOps platform that lives entirely
+          in <em>your</em> AWS account. CUR analytics, AI-powered cost chat, automated
+          findings, and Slack alerts — one unified platform, no vendor fee, no data
+          leaving your infrastructure.
+        </p>
+
+        <div class="flex flex-wrap gap-4">
+          <a href="https://github.com/udaykirannag2/kostops"
+             target="_blank" rel="noopener"
+             class="inline-flex items-center gap-2 bg-slate-800 border border-slate-600 hover:border-slate-400 text-white font-semibold px-6 py-3 rounded-lg transition-colors">
+            <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+              <path d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z" />
+            </svg>
+            View on GitHub
+          </a>
+          <a href="#contact"
+             class="inline-flex items-center gap-2 bg-aws hover:bg-aws-dark text-navy font-semibold px-6 py-3 rounded-lg transition-colors">
+            Contact Us →
+          </a>
+        </div>
+
+        <!-- Stats row -->
+        <div class="flex flex-wrap gap-8 mt-12 text-center">
+          <div>
+            <div class="text-2xl font-bold text-aws">$0</div>
+            <div class="text-xs text-slate-500 mt-0.5">SaaS vendor fee</div>
+          </div>
+          <div class="border-l border-slate-700 pl-8">
+            <div class="text-2xl font-bold text-white">~$45/mo</div>
+            <div class="text-xs text-slate-500 mt-0.5">Total AWS cost (10 accounts)</div>
+          </div>
+          <div class="border-l border-slate-700 pl-8">
+            <div class="text-2xl font-bold text-white">1</div>
+            <div class="text-xs text-slate-500 mt-0.5">Unified platform</div>
+          </div>
+          <div class="border-l border-slate-700 pl-8">
+            <div class="text-2xl font-bold text-white">20 min</div>
+            <div class="text-xs text-slate-500 mt-0.5">Deploy time</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Terminal demo -->
+      <div class="mt-16 terminal p-6 max-w-2xl">
+        <div class="flex items-center gap-2 mb-4">
+          <span class="w-3 h-3 rounded-full bg-red-500 opacity-80"></span>
+          <span class="w-3 h-3 rounded-full bg-yellow-500 opacity-80"></span>
+          <span class="w-3 h-3 rounded-full bg-green-500 opacity-80"></span>
+          <span class="ml-2 text-slate-500 text-xs">Slack — #finops</span>
+        </div>
+        <div class="space-y-3">
+          <div><span class="user">uday</span><span class="dim">  /kostops </span><span class="agent">what's my biggest cost spike this month?</span></div>
+          <div class="dim">⏳ Analysing your AWS cost data, this may take a few seconds…</div>
+          <div class="agent mt-2">Your <span class="dollars">EC2 spend jumped 47% vs last month</span> — from $12,400 to $18,200.</div>
+          <div class="agent">The increase is driven by 3 r6i.4xlarge instances in us-east-1 launched on Apr 3rd,</div>
+          <div class="agent">currently running with avg CPU of 8%. Potential savings: <span class="dollars">~$4,100/month</span>.</div>
+          <div class="agent">Want me to create a finding and investigate further? <span class="dim">[Yes / No]</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── PROBLEM STATEMENT ─────────────────────────────────────────────────── -->
+  <section class="py-24 px-6" style="background: linear-gradient(180deg, #0F172A 0%, #111827 100%);">
+    <div class="max-w-6xl mx-auto">
+      <div class="text-center mb-4">
+        <span class="text-xs font-semibold text-red-400 uppercase tracking-widest">The problem</span>
+      </div>
+      <h2 class="text-3xl md:text-4xl font-bold text-white text-center mb-16">Cloud cost tooling problems</h2>
+
+      <!-- Oval cards matching slide design -->
+      <div class="grid md:grid-cols-3 gap-8 items-start">
+
+        <!-- Oval 1: Vendor tax -->
+        <div class="flex flex-col items-center text-center">
+          <div class="relative w-64 h-80 mx-auto flex flex-col items-center justify-center px-8 py-10 rounded-[50%]"
+               style="background: #1a2035; border: 1.5px solid rgba(255,255,255,0.15);">
+            <div class="text-3xl mb-5">💰</div>
+            <h3 class="font-bold text-white text-lg mb-4 leading-snug">Vendor tax on FinOps</h3>
+            <p class="text-slate-300 text-sm leading-relaxed">
+              Teams pay AWS for the infra and then pay a second platform fee just to inspect their own bill.
+            </p>
+          </div>
+        </div>
+
+        <!-- Oval 2: Limited control -->
+        <div class="flex flex-col items-center text-center md:mt-8">
+          <div class="relative w-64 h-80 mx-auto flex flex-col items-center justify-center px-8 py-10 rounded-[50%]"
+               style="background: #1a2035; border: 1.5px solid rgba(255,255,255,0.15);">
+            <div class="text-3xl mb-5">📤</div>
+            <h3 class="font-bold text-white text-lg mb-4 leading-snug">Limited control and customization</h3>
+            <p class="text-slate-300 text-sm leading-relaxed">
+              When the tool is owned by a vendor, your organization has less control over workflows, reporting, and feature priorities.
+            </p>
+          </div>
+        </div>
+
+        <!-- Oval 3: Too many native tools -->
+        <div class="flex flex-col items-center text-center">
+          <div class="relative w-64 h-80 mx-auto flex flex-col items-center justify-center px-8 py-10 rounded-[50%]"
+               style="background: #1a2035; border: 1.5px solid rgba(255,255,255,0.15);">
+            <div class="text-3xl mb-5">🧩</div>
+            <h3 class="font-bold text-white text-lg mb-4 leading-snug">Too many Native tools</h3>
+            <p class="text-slate-300 text-sm leading-relaxed">
+              CUR, Cost Explorer, Compute Optimizer, Slack alerts, and dashboards usually live in separate workflows.
+            </p>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── DIFFERENTIATION ──────────────────────────────────────────────────── -->
+  <section id="differentiation" class="py-24 px-6" style="background: linear-gradient(180deg, #111827 0%, #0F172A 100%);">
+    <div class="max-w-6xl mx-auto">
+
+      <p class="text-center text-slate-500 text-sm tracking-widest uppercase mb-4">Differentiation</p>
+      <h2 class="text-3xl md:text-5xl font-bold text-white text-center mb-20">
+        Pay AWS for compute.<br class="hidden sm:block" /> Pay nobody else.
+      </h2>
+
+      <!-- Three differentiator ovals -->
+      <div class="grid md:grid-cols-3 gap-8 items-start">
+
+        <!-- Oval 1: Open-source foundation -->
+        <div class="flex justify-center">
+          <div class="w-72 h-96 flex flex-col justify-center px-10 py-12 rounded-[50%] card-hover"
+               style="background: #151e30; border: 1.5px solid rgba(255,255,255,0.18);">
+            <h3 class="font-bold text-white text-xl mb-5 leading-snug">Open-source foundation</h3>
+            <p class="text-slate-300 text-sm leading-relaxed">
+              MIT licensed, extensible, and transparent for teams that want control over FinOps workflows and future roadmap.
+            </p>
+          </div>
+        </div>
+
+        <!-- Oval 2: Self-hosted by design (offset down like slide) -->
+        <div class="flex justify-center md:mt-12">
+          <div class="w-72 h-96 flex flex-col justify-center px-10 py-12 rounded-[50%] card-hover"
+               style="background: #151e30; border: 1.5px solid rgba(255,255,255,0.18);">
+            <h3 class="font-bold text-white text-xl mb-5 leading-snug">Self-hosted by design</h3>
+            <p class="text-slate-300 text-sm leading-relaxed">
+              Ability to customize the platform, reports, and integrations. Runs entirely inside your AWS account — your data never moves.
+            </p>
+          </div>
+        </div>
+
+        <!-- Oval 3: Agentic AI -->
+        <div class="flex justify-center">
+          <div class="w-72 h-96 flex flex-col justify-center px-10 py-12 rounded-[50%] card-hover"
+               style="background: #151e30; border: 1.5px solid rgba(255,255,255,0.18);">
+            <h3 class="font-bold text-white text-xl mb-5 leading-snug">Agentic AI</h3>
+            <p class="text-slate-300 text-sm leading-relaxed">
+              AI is embedded into the workflow to guide decisions, automate tasks, and reduce manual effort.
+            </p>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Problem ↔ Solution grid below the ovals -->
+      <div class="mt-24 space-y-5">
+        <p class="text-center text-slate-500 text-sm tracking-widest uppercase mb-10">How we address every problem</p>
+
+        <div class="grid md:grid-cols-2 gap-5">
+          <div class="bg-red-950/25 border border-red-900/35 rounded-xl p-5">
+            <div class="flex items-start gap-3">
+              <span class="text-red-400 font-bold mt-0.5">✗</span>
+              <div>
+                <p class="text-sm font-semibold text-red-300 mb-1">Vendor tax on FinOps</p>
+                <p class="text-slate-400 text-sm">Teams pay AWS for compute and then pay a second platform fee — $500–$2,000+/month — just to inspect their own bill.</p>
+              </div>
+            </div>
+          </div>
+          <div class="bg-green-950/25 border border-green-900/35 rounded-xl p-5">
+            <div class="flex items-start gap-3">
+              <span class="text-green-400 font-bold mt-0.5">✓</span>
+              <div>
+                <p class="text-sm font-semibold text-green-300 mb-1">~$45/month. Total. No subscription.</p>
+                <p class="text-slate-400 text-sm">KostOps runs on Lambda, DynamoDB, Bedrock, and API Gateway inside your account. You only pay your existing AWS bill.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid md:grid-cols-2 gap-5">
+          <div class="bg-red-950/25 border border-red-900/35 rounded-xl p-5">
+            <div class="flex items-start gap-3">
+              <span class="text-red-400 font-bold mt-0.5">✗</span>
+              <div>
+                <p class="text-sm font-semibold text-red-300 mb-1">Limited control &amp; customization</p>
+                <p class="text-slate-400 text-sm">Vendor-owned tools lock workflows, reporting, and feature priorities. Your roadmap requests go into a backlog you don't control.</p>
+              </div>
+            </div>
+          </div>
+          <div class="bg-green-950/25 border border-green-900/35 rounded-xl p-5">
+            <div class="flex items-start gap-3">
+              <span class="text-green-400 font-bold mt-0.5">✓</span>
+              <div>
+                <p class="text-sm font-semibold text-green-300 mb-1">MIT licensed. Fork it. Own it.</p>
+                <p class="text-slate-400 text-sm">Open source and deployed via CDK. Add agent tools, customise dashboards, extend integrations. You own every line of code and the roadmap.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid md:grid-cols-2 gap-5">
+          <div class="bg-red-950/25 border border-red-900/35 rounded-xl p-5">
+            <div class="flex items-start gap-3">
+              <span class="text-red-400 font-bold mt-0.5">✗</span>
+              <div>
+                <p class="text-sm font-semibold text-red-300 mb-1">Too many fragmented native tools</p>
+                <p class="text-slate-400 text-sm">CUR, Cost Explorer, Compute Optimizer, Slack alerts, and dashboards all live in separate workflows with no single pane of glass.</p>
+              </div>
+            </div>
+          </div>
+          <div class="bg-green-950/25 border border-green-900/35 rounded-xl p-5">
+            <div class="flex items-start gap-3">
+              <span class="text-green-400 font-bold mt-0.5">✓</span>
+              <div>
+                <p class="text-sm font-semibold text-green-300 mb-1">One platform. One deploy.</p>
+                <p class="text-slate-400 text-sm">KostOps unifies CUR analytics, AI chat, dashboards, Compute Optimizer, Slack alerts, and automated findings — all from a single CDK deploy, single UI.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── DEMO & SCREENSHOTS ──────────────────────────────────────────────── -->
+  <section id="demo" class="py-24 px-6" style="background: linear-gradient(180deg, #0F172A 0%, #111827 100%);">
+    <div class="max-w-5xl mx-auto">
+
+      <!-- Section header -->
+      <div class="text-center mb-14">
+        <span class="text-xs font-semibold text-electric uppercase tracking-widest block mb-4">See It In Action</span>
+        <h2 class="text-3xl md:text-4xl font-bold text-white mb-4">Watch the demo</h2>
+        <p class="text-slate-400 max-w-xl mx-auto">A 5-minute walkthrough: deploy, connect billing data, and start asking questions about your AWS costs.</p>
+      </div>
+
+      <!-- YouTube embed -->
+      <div class="rounded-2xl overflow-hidden border border-slate-700 shadow-2xl mb-16" style="position:relative;padding-bottom:56.25%;">
+        <iframe
+          src="https://www.youtube.com/embed/c45qbWEdTcs"
+          title="KostOps Overview and Demo"
+          frameborder="0"
+          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+          allowfullscreen
+          style="position:absolute;top:0;left:0;width:100%;height:100%;"
+        ></iframe>
+      </div>
+
+      <!-- Product screenshots -->
+      <div class="text-center mb-10">
+        <h3 class="text-2xl font-bold text-white mb-2">Product screenshots</h3>
+        <p class="text-slate-400">Chat UI and QuickSight billing dashboards — all running inside your own AWS account.</p>
+      </div>
+
+      <div class="grid md:grid-cols-2 gap-8">
+
+        <!-- Chat UI screenshot -->
+        <div class="rounded-xl overflow-hidden border border-slate-700 shadow-xl group">
+          <div class="bg-navy-light px-4 py-3 border-b border-slate-700 flex items-center gap-2">
+            <div class="flex gap-1.5">
+              <div class="w-3 h-3 rounded-full bg-red-500"></div>
+              <div class="w-3 h-3 rounded-full bg-yellow-500"></div>
+              <div class="w-3 h-3 rounded-full bg-green-500"></div>
+            </div>
+            <span class="text-xs text-slate-400 font-mono ml-2">KostOps — AI Chat Agent</span>
+          </div>
+          <img
+            src="assets/chat-ui.png"
+            alt="KostOps AI Chat — ask questions about your AWS spend in plain English"
+            class="w-full block"
+          />
+          <div class="bg-navy-light px-4 py-3">
+            <p class="text-sm text-slate-300 font-medium">AI Chat Agent</p>
+            <p class="text-xs text-slate-500 mt-0.5">Ask "give me last 4 months of spend by service?" — get a structured breakdown instantly.</p>
+          </div>
+        </div>
+
+        <!-- Billing Dashboard screenshot -->
+        <div class="rounded-xl overflow-hidden border border-slate-700 shadow-xl group">
+          <div class="bg-navy-light px-4 py-3 border-b border-slate-700 flex items-center gap-2">
+            <div class="flex gap-1.5">
+              <div class="w-3 h-3 rounded-full bg-red-500"></div>
+              <div class="w-3 h-3 rounded-full bg-yellow-500"></div>
+              <div class="w-3 h-3 rounded-full bg-green-500"></div>
+            </div>
+            <span class="text-xs text-slate-400 font-mono ml-2">KostOps — Billing Summary Dashboard</span>
+          </div>
+          <img
+            src="assets/billing-dashboard.png"
+            alt="KostOps Billing Summary — QuickSight-powered invoice spend, blended cost, and charge type breakdown"
+            class="w-full block"
+          />
+          <div class="bg-navy-light px-4 py-3">
+            <p class="text-sm text-slate-300 font-medium">Billing Summary Dashboard</p>
+            <p class="text-xs text-slate-500 mt-0.5">Invoice spend by account, blended cost trends, and charge type breakdown — all in QuickSight SPICE.</p>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── FEATURES ─────────────────────────────────────────────────────────── -->
+  <section id="features" class="py-24 px-6">
+    <div class="max-w-6xl mx-auto">
+      <div class="text-center mb-16">
+        <span class="text-xs font-semibold text-electric uppercase tracking-widest block mb-4">Features</span>
+        <h2 class="text-3xl md:text-4xl font-bold text-white mb-4">One platform. Zero vendor lock-in.</h2>
+        <p class="text-slate-400 max-w-xl mx-auto">Everything that used to require 4–5 separate tools — unified in a single CDK deploy inside your own AWS account.</p>
+      </div>
+
+      <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
+
+        <!-- Feature 1 -->
+        <div class="bg-slate-800/40 border border-slate-700 rounded-xl p-6 card-hover">
+          <div class="w-10 h-10 rounded-lg bg-electric/10 border border-electric/20 flex items-center justify-center text-electric mb-4 text-lg">💬</div>
+          <h3 class="font-semibold text-white mb-2">AI Chat Agent</h3>
+          <p class="text-slate-400 text-sm leading-relaxed">Ask questions in plain English from the web UI or Slack. The agent reasons over your real CUR data using Athena and Cost Explorer — no pre-built reports required.</p>
+        </div>
+
+        <!-- Feature 2 -->
+        <div class="bg-slate-800/40 border border-slate-700 rounded-xl p-6 card-hover">
+          <div class="w-10 h-10 rounded-lg bg-aws/10 border border-aws/20 flex items-center justify-center text-aws mb-4 text-lg">📊</div>
+          <h3 class="font-semibold text-white mb-2">Cost Dashboards</h3>
+          <p class="text-slate-400 text-sm leading-relaxed">QuickSight-powered interactive dashboards for billing summary, compute, storage, AI/ML, commitments, and rightsizing. Filter by account, region, and date.</p>
+        </div>
+
+        <!-- Feature 3 -->
+        <div class="bg-slate-800/40 border border-slate-700 rounded-xl p-6 card-hover">
+          <div class="w-10 h-10 rounded-lg bg-green-500/10 border border-green-500/20 flex items-center justify-center text-green-400 mb-4 text-lg">🔍</div>
+          <h3 class="font-semibold text-white mb-2">Automated Findings</h3>
+          <p class="text-slate-400 text-sm leading-relaxed">Daily scan surfaces idle EC2 instances, unattached EBS volumes, old snapshots, Savings Plan gaps, and rightsizing opportunities — ranked by estimated monthly savings.</p>
+        </div>
+
+        <!-- Feature 4 -->
+        <div class="bg-slate-800/40 border border-slate-700 rounded-xl p-6 card-hover">
+          <div class="w-10 h-10 rounded-lg bg-purple-500/10 border border-purple-500/20 flex items-center justify-center text-purple-400 mb-4 text-lg">⚡</div>
+          <h3 class="font-semibold text-white mb-2">Slack Integration</h3>
+          <p class="text-slate-400 text-sm leading-relaxed">Daily digest every morning with top savings opportunities. Use <code class="text-xs bg-slate-700 px-1 py-0.5 rounded">/kostops</code> slash command to ask cost questions from any Slack channel.</p>
+        </div>
+
+        <!-- Feature 5 -->
+        <div class="bg-slate-800/40 border border-slate-700 rounded-xl p-6 card-hover">
+          <div class="w-10 h-10 rounded-lg bg-yellow-500/10 border border-yellow-500/20 flex items-center justify-center text-yellow-400 mb-4 text-lg">🏢</div>
+          <h3 class="font-semibold text-white mb-2">Multi-Account</h3>
+          <p class="text-slate-400 text-sm leading-relaxed">Payer account + unlimited linked accounts. Cross-account IAM role reads CUR data directly — no S3 replication, no data duplication, no extra storage cost.</p>
+        </div>
+
+        <!-- Feature 6 -->
+        <div class="bg-slate-800/40 border border-slate-700 rounded-xl p-6 card-hover">
+          <div class="w-10 h-10 rounded-lg bg-red-500/10 border border-red-500/20 flex items-center justify-center text-red-400 mb-4 text-lg">🔒</div>
+          <h3 class="font-semibold text-white mb-2">Fully Self-Hosted</h3>
+          <p class="text-slate-400 text-sm leading-relaxed">Deploys entirely into your AWS account via CDK. No SaaS subscription, no data sent to third parties, no vendor lock-in. You own the infrastructure and the data.</p>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── HOW IT WORKS ──────────────────────────────────────────────────────── -->
+  <section id="how-it-works" class="py-24 px-6 bg-navy-light/20">
+    <div class="max-w-4xl mx-auto">
+      <div class="text-center mb-16">
+        <h2 class="text-3xl md:text-4xl font-bold text-white mb-4">Up and running in four steps</h2>
+        <p class="text-slate-400">No agents to manage, no data pipelines to build. CDK handles everything.</p>
+      </div>
+
+      <div class="space-y-10">
+
+        <!-- Step 1 -->
+        <div class="relative flex gap-6 pl-2">
+          <div class="step-line relative">
+            <div class="w-10 h-10 rounded-full bg-electric flex items-center justify-center text-navy font-bold text-sm flex-shrink-0">1</div>
+          </div>
+          <div class="pb-8">
+            <h3 class="font-semibold text-white text-lg mb-2">Deploy with CDK (~20 min)</h3>
+            <p class="text-slate-400 text-sm leading-relaxed mb-3">Run two commands — one in your payer account, one in your linked account. CDK provisions all infrastructure: Cognito auth, API Gateway, DynamoDB, the AI agent on AgentCore, and a React UI on CloudFront.</p>
+            <div class="terminal p-4 text-xs">
+              <div><span class="dim"># Step 1: Payer account</span></div>
+              <div><span class="prompt">$</span> cdk deploy KostOpsPayerStack --context linkedAccountId=123456789012 ...</div>
+              <div class="mt-2"><span class="dim"># Step 2: Linked account</span></div>
+              <div><span class="prompt">$</span> cdk deploy --all --context payerAccountId=... --context adminEmail=you@co.com</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Step 2 -->
+        <div class="relative flex gap-6 pl-2">
+          <div class="step-line relative">
+            <div class="w-10 h-10 rounded-full bg-aws flex items-center justify-center text-navy font-bold text-sm flex-shrink-0">2</div>
+          </div>
+          <div class="pb-8">
+            <h3 class="font-semibold text-white text-lg mb-2">Connect your CUR</h3>
+            <p class="text-slate-400 text-sm leading-relaxed">KostOps auto-detects your Cost and Usage Report S3 prefix, starts the Glue crawler, and builds the Athena schema — no manual configuration. If CUR isn't enabled, the setup guide walks you through enabling it in 5 minutes.</p>
+          </div>
+        </div>
+
+        <!-- Step 3 -->
+        <div class="relative flex gap-6 pl-2">
+          <div class="step-line relative">
+            <div class="w-10 h-10 rounded-full bg-purple-500 flex items-center justify-center text-white font-bold text-sm flex-shrink-0">3</div>
+          </div>
+          <div class="pb-8">
+            <h3 class="font-semibold text-white text-lg mb-2">Invite your team</h3>
+            <p class="text-slate-400 text-sm leading-relaxed">The React UI is live at the CloudFront URL. Admin receives login credentials by email. Add team members via Cognito — no IAM users or roles needed for non-technical stakeholders.</p>
+          </div>
+        </div>
+
+        <!-- Step 4 -->
+        <div class="flex gap-6 pl-2">
+          <div class="w-10 h-10 rounded-full bg-green-500 flex items-center justify-center text-white font-bold text-sm flex-shrink-0">4</div>
+          <div>
+            <h3 class="font-semibold text-white text-lg mb-2">Ask questions, get answers</h3>
+            <p class="text-slate-400 text-sm leading-relaxed">Chat from the web UI or type <code class="text-xs bg-slate-700 px-1 py-0.5 rounded">/kostops</code> in Slack. The agent reads your real CUR data through Athena and Cost Explorer, surfaces savings opportunities, and delivers a daily digest every morning.</p>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── ARCHITECTURE CALLOUT ──────────────────────────────────────────────── -->
+  <section class="py-20 px-6 bg-slate-900/50 border-y border-slate-800">
+    <div class="max-w-6xl mx-auto flex flex-col lg:flex-row gap-12 items-center">
+      <div class="lg:w-1/2">
+        <div class="text-xs font-semibold text-electric uppercase tracking-widest mb-4">Architecture</div>
+        <h2 class="text-2xl md:text-3xl font-bold text-white mb-4">Your data, your account, your rules</h2>
+        <p class="text-slate-400 leading-relaxed mb-6">
+          KostOps runs entirely inside your AWS infrastructure. There is no external SaaS service, no webhook to a third-party server, no billing data transmitted outside your account. The only outbound calls are to AWS APIs — Bedrock, Cost Explorer, Athena — which are already in your VPC trust boundary.
+        </p>
+        <ul class="space-y-3 text-sm text-slate-300">
+          <li class="flex items-start gap-3">
+            <span class="text-electric mt-0.5">✓</span>
+            <span>Payer CUR data is read in-place (no S3 replication or duplication)</span>
+          </li>
+          <li class="flex items-start gap-3">
+            <span class="text-electric mt-0.5">✓</span>
+            <span>Claude runs via Amazon Bedrock cross-region inference profiles — stays within AWS</span>
+          </li>
+          <li class="flex items-start gap-3">
+            <span class="text-electric mt-0.5">✓</span>
+            <span>Cognito authentication — no third-party auth provider</span>
+          </li>
+          <li class="flex items-start gap-3">
+            <span class="text-electric mt-0.5">✓</span>
+            <span>All secrets stored in SSM Parameter Store SecureString — never in code or env vars</span>
+          </li>
+        </ul>
+      </div>
+      <div class="lg:w-1/2 terminal p-6 text-xs leading-6">
+        <div class="dim mb-3">// architecture at a glance</div>
+        <div><span class="user">Payer Account</span></div>
+        <div class="pl-4 dim">S3 (CUR Parquet) ← billing service writes daily</div>
+        <div class="pl-4 dim">cross-account-role ← read-only Cost Explorer access</div>
+        <div class="mt-3"><span class="user">Linked Account (KostOps runs here)</span></div>
+        <div class="pl-4"><span class="prompt">Glue Crawler</span> → reads payer S3 cross-account (no replication)</div>
+        <div class="pl-4"><span class="prompt">Athena</span>       → queries Glue catalog, 10 GB scan limit</div>
+        <div class="pl-4"><span class="prompt">AgentCore</span>    → strands-agents + Claude Sonnet via Bedrock</div>
+        <div class="pl-4"><span class="prompt">API Gateway</span>  → Cognito JWT auth on all endpoints</div>
+        <div class="pl-4"><span class="prompt">CloudFront</span>   → React SPA (S3 + OAC, no public bucket)</div>
+        <div class="pl-4"><span class="prompt">DynamoDB</span>     → findings, conversations, integrations</div>
+        <div class="mt-3 dollars">Total AWS cost: ~$43-50/month for 10 accounts</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── ADVANTAGES TABLE ──────────────────────────────────────────────────── -->
+  <section id="advantages" class="py-24 px-6">
+    <div class="max-w-6xl mx-auto">
+      <div class="text-center mb-16">
+        <h2 class="text-3xl md:text-4xl font-bold text-white mb-4">How KostOps compares</h2>
+        <p class="text-slate-400">The only self-hosted, AI-native FinOps platform in the market.</p>
+      </div>
+
+      <div class="overflow-x-auto rounded-xl border border-slate-700">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="bg-slate-800 border-b border-slate-700">
+              <th class="text-left px-5 py-4 text-slate-400 font-medium w-44">Capability</th>
+              <th class="px-5 py-4 text-center">
+                <div class="text-white font-semibold">KostOps</div>
+                <div class="text-aws text-xs">~$45/mo AWS cost</div>
+              </th>
+              <th class="px-5 py-4 text-center">
+                <div class="text-slate-300 font-medium">CloudHealth / Apptio</div>
+                <div class="text-slate-500 text-xs">$500–$2,000+/mo</div>
+              </th>
+              <th class="px-5 py-4 text-center">
+                <div class="text-slate-300 font-medium">AWS Cost Explorer</div>
+                <div class="text-slate-500 text-xs">Free (limited)</div>
+              </th>
+              <th class="px-5 py-4 text-center">
+                <div class="text-slate-300 font-medium">Spreadsheets</div>
+                <div class="text-slate-500 text-xs">Free</div>
+              </th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-800">
+            <tr class="hover:bg-slate-800/30 transition-colors">
+              <td class="px-5 py-4 text-slate-400">AI chat interface</td>
+              <td class="px-5 py-4 text-center text-green-400">✅ Full (web + Slack)</td>
+              <td class="px-5 py-4 text-center text-slate-500">❌</td>
+              <td class="px-5 py-4 text-center text-slate-500">❌</td>
+              <td class="px-5 py-4 text-center text-slate-500">❌</td>
+            </tr>
+            <tr class="hover:bg-slate-800/30 transition-colors">
+              <td class="px-5 py-4 text-slate-400">Self-hosted / your data</td>
+              <td class="px-5 py-4 text-center text-green-400">✅ Always</td>
+              <td class="px-5 py-4 text-center text-red-400">❌ SaaS</td>
+              <td class="px-5 py-4 text-center text-green-400">✅ AWS-native</td>
+              <td class="px-5 py-4 text-center text-green-400">✅</td>
+            </tr>
+            <tr class="hover:bg-slate-800/30 transition-colors">
+              <td class="px-5 py-4 text-slate-400">Slack slash command</td>
+              <td class="px-5 py-4 text-center text-green-400">✅ /kostops</td>
+              <td class="px-5 py-4 text-center text-slate-400">Some tiers</td>
+              <td class="px-5 py-4 text-center text-slate-500">❌</td>
+              <td class="px-5 py-4 text-center text-slate-500">❌</td>
+            </tr>
+            <tr class="hover:bg-slate-800/30 transition-colors">
+              <td class="px-5 py-4 text-slate-400">Automated findings</td>
+              <td class="px-5 py-4 text-center text-green-400">✅ Daily scan</td>
+              <td class="px-5 py-4 text-center text-green-400">✅</td>
+              <td class="px-5 py-4 text-center text-slate-400">Limited</td>
+              <td class="px-5 py-4 text-center text-slate-500">❌ Manual</td>
+            </tr>
+            <tr class="hover:bg-slate-800/30 transition-colors">
+              <td class="px-5 py-4 text-slate-400">Custom dashboards</td>
+              <td class="px-5 py-4 text-center text-aws">⚡ Phase 3</td>
+              <td class="px-5 py-4 text-center text-green-400">✅</td>
+              <td class="px-5 py-4 text-center text-slate-400">Limited</td>
+              <td class="px-5 py-4 text-center text-green-400">✅</td>
+            </tr>
+            <tr class="hover:bg-slate-800/30 transition-colors">
+              <td class="px-5 py-4 text-slate-400">CDK / IaC deploy</td>
+              <td class="px-5 py-4 text-center text-green-400">✅ Single command</td>
+              <td class="px-5 py-4 text-center text-slate-500">❌ SaaS onboarding</td>
+              <td class="px-5 py-4 text-center text-green-400">✅ Built-in</td>
+              <td class="px-5 py-4 text-center text-slate-500">❌</td>
+            </tr>
+            <tr class="hover:bg-slate-800/30 transition-colors">
+              <td class="px-5 py-4 text-slate-400">Remediation workflows</td>
+              <td class="px-5 py-4 text-center text-aws">⚡ Phase 3</td>
+              <td class="px-5 py-4 text-center text-green-400">✅ Some tiers</td>
+              <td class="px-5 py-4 text-center text-slate-500">❌</td>
+              <td class="px-5 py-4 text-center text-slate-500">❌</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="text-xs text-slate-600 text-center mt-4">⚡ = Coming in Phase 3 roadmap</p>
+    </div>
+  </section>
+
+  <!-- ─── CONTACT ────────────────────────────────────────────────────────────── -->
+  <section id="contact" class="py-24 px-6 bg-navy-light/30 border-t border-slate-800">
+    <div class="max-w-2xl mx-auto">
+      <div class="text-center mb-12">
+        <h2 class="text-3xl md:text-4xl font-bold text-white mb-4">Get in touch</h2>
+        <p class="text-slate-400">
+          Interested in KostOps, have a question, or want to discuss a custom deployment?
+          Send a message and we'll get back to you within 24 hours.
+        </p>
+      </div>
+
+      <form id="contact-form" class="space-y-5" novalidate>
+        <div class="grid sm:grid-cols-2 gap-5">
+          <div>
+            <label for="name" class="block text-sm font-medium text-slate-300 mb-1.5">Name *</label>
+            <input type="text" id="name" name="name" required
+                   placeholder="Jane Smith"
+                   class="w-full bg-slate-800 border border-slate-600 focus:border-electric focus:ring-1 focus:ring-electric rounded-lg px-4 py-2.5 text-white placeholder-slate-500 text-sm outline-none transition" />
+          </div>
+          <div>
+            <label for="company" class="block text-sm font-medium text-slate-300 mb-1.5">Company</label>
+            <input type="text" id="company" name="company"
+                   placeholder="Acme Corp"
+                   class="w-full bg-slate-800 border border-slate-600 focus:border-electric focus:ring-1 focus:ring-electric rounded-lg px-4 py-2.5 text-white placeholder-slate-500 text-sm outline-none transition" />
+          </div>
+        </div>
+
+        <div>
+          <label for="email" class="block text-sm font-medium text-slate-300 mb-1.5">Email *</label>
+          <input type="email" id="email" name="email" required
+                 placeholder="jane@acmecorp.com"
+                 class="w-full bg-slate-800 border border-slate-600 focus:border-electric focus:ring-1 focus:ring-electric rounded-lg px-4 py-2.5 text-white placeholder-slate-500 text-sm outline-none transition" />
+        </div>
+
+        <div>
+          <label for="aws_accounts" class="block text-sm font-medium text-slate-300 mb-1.5">Number of AWS accounts</label>
+          <select id="aws_accounts" name="aws_accounts"
+                  class="w-full bg-slate-800 border border-slate-600 focus:border-electric focus:ring-1 focus:ring-electric rounded-lg px-4 py-2.5 text-slate-300 text-sm outline-none transition">
+            <option value="">Select range…</option>
+            <option>1–5</option>
+            <option>6–20</option>
+            <option>21–50</option>
+            <option>50+</option>
+          </select>
+        </div>
+
+        <div>
+          <label for="message" class="block text-sm font-medium text-slate-300 mb-1.5">Message *</label>
+          <textarea id="message" name="message" rows="4" required
+                    placeholder="Tell us about your AWS environment and what you're trying to solve…"
+                    class="w-full bg-slate-800 border border-slate-600 focus:border-electric focus:ring-1 focus:ring-electric rounded-lg px-4 py-2.5 text-white placeholder-slate-500 text-sm outline-none transition resize-none"></textarea>
+        </div>
+
+        <!-- Status message -->
+        <div id="form-status" class="hidden rounded-lg px-4 py-3 text-sm"></div>
+
+        <button type="submit" id="submit-btn"
+                class="w-full bg-aws hover:bg-aws-dark text-navy font-semibold py-3 rounded-lg transition-colors flex items-center justify-center gap-2">
+          <span id="submit-text">Send Message</span>
+          <svg id="submit-spinner" class="hidden w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+          </svg>
+        </button>
+      </form>
+
+      <p class="text-center text-slate-500 text-sm mt-6">
+        We'll get back to you within 24 hours.
+      </p>
+    </div>
+  </section>
+
+  <!-- ─── FOOTER ─────────────────────────────────────────────────────────────── -->
+  <footer class="border-t border-slate-800 py-10 px-6">
+    <div class="max-w-6xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4 text-sm text-slate-500">
+      <div class="flex items-center gap-2 font-semibold text-slate-400">
+        <span class="text-aws text-xl">⬡</span>
+        KostOps
+      </div>
+      <div class="flex items-center gap-1">
+        Built on
+        <svg class="w-4 h-4 mx-1 text-aws" fill="currentColor" viewBox="0 0 24 24">
+          <path d="M6.763 10.036c0 .296.032.535.088.71.064.176.144.368.256.576.04.064.056.128.056.184 0 .08-.048.16-.152.24l-.504.336c-.072.048-.144.072-.208.072-.08 0-.16-.04-.232-.112a2.336 2.336 0 01-.28-.368 5.875 5.875 0 01-.24-.464c-.6.712-1.352 1.064-2.256 1.064-.648 0-1.16-.184-1.528-.552-.368-.368-.552-.856-.552-1.464 0-.648.232-1.168.696-1.56.464-.392 1.08-.592 1.856-.592.256 0 .528.024.808.064.28.04.568.104.872.176V7.76c0-.576-.12-.976-.36-1.208-.24-.232-.656-.344-1.24-.344-.264 0-.536.032-.816.096a6.07 6.07 0 00-.816.256 2.15 2.15 0 01-.264.096.474.474 0 01-.12.016c-.104 0-.16-.072-.16-.224V5.96c0-.12.016-.208.056-.264.04-.056.112-.112.216-.168.264-.136.584-.248.96-.344a4.74 4.74 0 011.216-.144c.92 0 1.6.208 2.024.624.424.416.64 1.048.64 1.896v2.472zm-3.12 1.16c.248 0 .504-.048.776-.144.272-.096.512-.264.712-.496.12-.144.208-.304.248-.488.04-.184.064-.408.064-.672V9.12a7.072 7.072 0 00-.696-.128 5.638 5.638 0 00-.712-.048c-.512 0-.888.096-1.144.296-.256.2-.384.488-.384.864 0 .352.088.616.272.792.176.184.432.272.864.272zm6.208.832c-.12 0-.2-.024-.256-.072-.056-.04-.104-.136-.144-.272l-1.608-5.288c-.04-.144-.064-.24-.064-.296 0-.12.056-.184.168-.184h.688c.128 0 .208.024.256.072.056.04.096.136.136.272l1.152 4.536 1.072-4.536c.032-.144.072-.24.128-.272.056-.04.144-.072.272-.072h.56c.128 0 .208.024.272.072.056.04.104.136.128.272l1.088 4.592 1.184-4.592c.04-.144.088-.24.136-.272.056-.04.136-.072.256-.072h.656c.112 0 .168.056.168.176 0 .032-.008.072-.016.112-.008.04-.024.096-.056.184l-1.648 5.288c-.04.144-.088.232-.144.272-.056.04-.136.072-.256.072h-.608c-.128 0-.208-.024-.264-.072-.056-.04-.104-.144-.128-.288l-1.064-4.408-1.064 4.4c-.032.144-.072.24-.128.288-.056.04-.144.072-.264.072h-.608zm8.304.208c-.392 0-.784-.048-1.16-.144a3.4 3.4 0 01-.872-.328c-.12-.072-.2-.144-.232-.224a.561.561 0 01-.048-.224v-.44c0-.152.056-.224.168-.224.04 0 .08.008.12.024.04.016.1.04.168.072.232.104.48.184.744.24.272.056.536.088.808.088.432 0 .768-.08 1-.24.232-.16.352-.392.352-.688 0-.208-.064-.376-.192-.52-.128-.144-.368-.272-.712-.392l-1.024-.32c-.52-.16-.904-.4-1.144-.72-.24-.312-.36-.664-.36-1.048 0-.304.064-.568.2-.8.136-.232.32-.432.544-.592.224-.16.48-.28.768-.36.288-.08.592-.12.912-.12.168 0 .336.008.504.032.176.024.336.056.496.096.152.04.296.08.432.128.136.048.24.096.312.144.112.064.192.136.24.208.048.072.072.16.072.272v.408c0 .152-.056.232-.168.232-.064 0-.16-.032-.288-.096a3.474 3.474 0 00-1.392-.272c-.392 0-.704.064-.928.2-.224.136-.336.344-.336.632 0 .208.072.384.216.528.144.144.408.28.784.408l1.008.32c.512.16.888.392 1.12.696.232.304.344.648.344 1.024 0 .312-.064.592-.192.832-.128.24-.304.44-.528.608-.224.168-.488.288-.792.376-.312.08-.64.12-.992.12z"/>
+        </svg>
+        AWS
+      </div>
+      <div class="flex items-center gap-6">
+        <a href="https://github.com/udaykirannag2/kostops" target="_blank" rel="noopener" class="hover:text-slate-300 transition-colors">GitHub</a>
+        <a href="#contact" class="hover:text-slate-300 transition-colors">Contact</a>
+        <span>© 2026 KostOps</span>
+      </div>
+    </div>
+  </footer>
+
+  <!-- ─── SCRIPTS ────────────────────────────────────────────────────────────── -->
+  <script>
+    // Mobile menu
+    document.getElementById('mobile-menu-btn').addEventListener('click', () => {
+      document.getElementById('mobile-menu').classList.toggle('hidden');
+    });
+    function closeMobileMenu() {
+      document.getElementById('mobile-menu').classList.add('hidden');
+    }
+
+    // EmailJS — replace these with your real values after creating an account at emailjs.com
+    // 1. Sign up at https://www.emailjs.com (free — 200 emails/month)
+    // 2. Create a service (Gmail works)
+    // 3. Create an email template with variables: {{name}}, {{company}}, {{email}}, {{aws_accounts}}, {{message}}
+    // 4. Replace the three placeholder values below
+    const EMAILJS_PUBLIC_KEY  = 'YOUR_PUBLIC_KEY';   // Account > API Keys
+    const EMAILJS_SERVICE_ID  = 'YOUR_SERVICE_ID';   // Email Services
+    const EMAILJS_TEMPLATE_ID = 'YOUR_TEMPLATE_ID';  // Email Templates
+
+    (function() {
+      if (EMAILJS_PUBLIC_KEY !== 'YOUR_PUBLIC_KEY') {
+        emailjs.init({ publicKey: EMAILJS_PUBLIC_KEY });
+      }
+    })();
+
+    document.getElementById('contact-form').addEventListener('submit', async function(e) {
+      e.preventDefault();
+
+      const btn     = document.getElementById('submit-btn');
+      const text    = document.getElementById('submit-text');
+      const spinner = document.getElementById('submit-spinner');
+      const status  = document.getElementById('form-status');
+
+      // Validate required fields
+      const name    = document.getElementById('name').value.trim();
+      const email   = document.getElementById('email').value.trim();
+      const message = document.getElementById('message').value.trim();
+
+      if (!name || !email || !message) {
+        status.className = 'rounded-lg px-4 py-3 text-sm bg-red-900/40 border border-red-700 text-red-300';
+        status.textContent = 'Please fill in all required fields.';
+        status.classList.remove('hidden');
+        return;
+      }
+
+      // Show loading state
+      btn.disabled = true;
+      text.textContent = 'Sending…';
+      spinner.classList.remove('hidden');
+      status.classList.add('hidden');
+
+      // If EmailJS is not configured, fall back to mailto
+      if (EMAILJS_PUBLIC_KEY === 'YOUR_PUBLIC_KEY') {
+        const subject = encodeURIComponent(`KostOps enquiry from ${name}`);
+        const body    = encodeURIComponent(
+          `Name: ${name}\nCompany: ${document.getElementById('company').value}\nEmail: ${email}\nAWS Accounts: ${document.getElementById('aws_accounts').value}\n\n${message}`
+        );
+        window.location.href = `mailto:?subject=${subject}&body=${body}`;
+        btn.disabled = false;
+        text.textContent = 'Send Message';
+        spinner.classList.add('hidden');
+        return;
+      }
+
+      try {
+        await emailjs.sendForm(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, this);
+        status.className = 'rounded-lg px-4 py-3 text-sm bg-green-900/40 border border-green-700 text-green-300';
+        status.textContent = '✓ Message sent! We\'ll get back to you within 24 hours.';
+        status.classList.remove('hidden');
+        this.reset();
+      } catch (err) {
+        status.className = 'rounded-lg px-4 py-3 text-sm bg-red-900/40 border border-red-700 text-red-300';
+        status.textContent = 'Something went wrong sending the form. Please try again in a moment.';
+        status.classList.remove('hidden');
+      } finally {
+        btn.disabled = false;
+        text.textContent = 'Send Message';
+        spinner.classList.add('hidden');
+      }
+    });
+  </script>
+
+</body>
+</html>
