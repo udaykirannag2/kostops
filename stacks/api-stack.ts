@@ -224,11 +224,17 @@ export class ApiStack extends cdk.Stack {
       logRetention:  logs.RetentionDays.TWO_WEEKS,
     });
 
-    // Allow slack-command-handler to invoke itself asynchronously
+    // Allow slack-command-handler to invoke itself asynchronously.
+    // We use a LITERAL ARN (not slackCommandHandler.functionArn) on purpose:
+    // referencing the function as a token would insert a CDK edge from the
+    // shared lambdaRole's default policy back to slackCommandHandler, creating
+    // a CFN cycle (lambdaRole → DefaultPolicy → slackCommandHandler → lambdaRole).
+    // The function name is stable (set via `functionName: 'kostops-slack-command-handler'`),
+    // so a literal ARN is safe and sidesteps the cycle entirely.
     slackCommandHandler.addToRolePolicy(new iam.PolicyStatement({
       sid:       'SelfInvoke',
       actions:   ['lambda:InvokeFunction'],
-      resources: [slackCommandHandler.functionArn],
+      resources: [`arn:aws:lambda:${this.region}:${this.account}:function:kostops-slack-command-handler`],
     }));
 
     // ── Lambda: members-handler ───────────────────────────────────────────────
