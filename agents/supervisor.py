@@ -33,6 +33,7 @@ import logging
 from typing import Callable, Dict, Optional
 
 from . import visibility
+from . import budget
 
 logger = logging.getLogger(__name__)
 
@@ -45,19 +46,44 @@ SPECIALISTS: Dict[str, Dict] = {
         'handler': visibility.handle,
         'write':   False,
     },
-    # 'budget':       {'handler': budget.handle,       'write': True},   # Phase 1
+    'budget': {
+        'handler': budget.handle,
+        # Slice B.1 ships read-only budget tools; flip to True when set_budget
+        # / create_scope land in Slice B.2.
+        'write':   False,
+    },
     # 'optimization': {'handler': optimization.handle, 'write': False},  # Phase 4
     # 'analytics':    {'handler': analytics.handle,    'write': True},   # Phase 5
 }
+
+
+# Ordered keyword rules for intent classification. Evaluated top-to-bottom;
+# first match wins. Keep each rule short and specific — false positives send
+# the user to the wrong specialist and are harder to spot than misses.
+# Phase 2 will replace this with a Haiku classifier once we can eval tradeoffs.
+_INTENT_RULES: list[tuple[str, tuple[str, ...]]] = [
+    ('budget', (
+        'budget', 'budgets', 'scope', 'scopes', 'team budget', 'team spend',
+        'variance', 'planned spend', 'forecast vs budget', 'actual vs budget',
+        'over budget', 'under budget', 'burn rate', 'quarterly budget',
+        'monthly budget', 'which ou',
+    )),
+]
 
 
 def classify(message: str, ctx: dict | None = None) -> str:
     """
     Decide which specialist to dispatch to.
 
-    MVP: always return 'visibility'. Phase 1 will replace this with a
-    Haiku-based intent classifier once multiple specialists exist.
+    Uses a keyword heuristic today — literal substring match against the
+    user's message. Defaults to 'visibility' so ambiguous questions land on
+    the safe, read-only specialist. Phase 2 will swap this for a Haiku call
+    with the specialist tool surfaces as rubric input.
     """
+    text = (message or '').lower()
+    for intent, keywords in _INTENT_RULES:
+        if any(k in text for k in keywords) and intent in SPECIALISTS:
+            return intent
     return 'visibility'
 
 

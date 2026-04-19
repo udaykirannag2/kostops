@@ -56,6 +56,10 @@ const dataStack = new DataStack(app, 'KostOpsDataStack', {
 const agentStack = new AgentStack(app, 'KostOpsAgentStack', {
   env,
   findingsTable:             dataStack.findingsTable,
+  scopesTable:               dataStack.scopesTable,
+  budgetsTable:              dataStack.budgetsTable,
+  forecastsTable:            dataStack.forecastsTable,
+  scopeActualsTable:         dataStack.scopeActualsTable,
   payerCurBucketName,
   athenaResultsBucketName:   dataStack.athenaResultsBucketName,
   payerAccountId,
@@ -66,9 +70,22 @@ agentStack.addDependency(authStack);
 agentStack.addDependency(dataStack);
 
 // 4 — API (Lambda + API Gateway)
-// agentStack.agentRuntimeArn is set by the Custom Resource after AgentCore
-// Runtime creation; CDK passes it to ApiStack as an environment variable on
-// the keepwarm Lambda (chat-handler gets it via update_references in Lambda).
+//
+// IMPORTANT: we intentionally do NOT pass agentStack.agentRuntimeArn as a CDK
+// token here. Doing so creates a Fn::ImportValue from AgentStack → ApiStack
+// that CFN locks for the lifetime of the consumer stack. Whenever AgentStack
+// legitimately replaces the runtime (env-var change, new specialist), CFN
+// blocks the export change with "Cannot update export … as it is in use by
+// KostOpsApiStack" because the consuming stack still references the old value.
+//
+// Instead, the custom resource in lambda/agentcore_deploy.py:
+//   1. Writes the current runtime ARN to SSM `/kostops/agent-runtime-arn`
+//   2. Calls lambda.update_function_configuration on chat-handler,
+//      keepwarm-handler, slack-command-handler to patch AGENT_RUNTIME_ARN.
+// So ApiStack ships with AGENT_RUNTIME_ARN='' in its template; the real value
+// is patched post-deploy and persists through Lambda env var updates (CDK
+// Lambda updates preserve the env value when the template has ''). chat
+// Lambda handles empty ARN gracefully with a 503 "Agent not deployed yet".
 const apiStack = new ApiStack(app, 'KostOpsApiStack', {
   env,
   findingsTable:             dataStack.findingsTable,
@@ -81,14 +98,17 @@ const apiStack = new ApiStack(app, 'KostOpsApiStack', {
   scopeActualsTable:         dataStack.scopeActualsTable,
   importJobsTable:           dataStack.importJobsTable,
   agentEndpointUrl:          agentStack.agentEndpointUrl,
-  agentRuntimeArn:           agentStack.agentRuntimeArn,
+  agentRuntimeArn:           '',  // patched by agentcore_deploy.py post-create
   userPool:                  authStack.userPool,
   slackWebhookUrl,
   athenaWorkgroup:           'kostops-workgroup',
   athenaResultsBucketName:   dataStack.athenaResultsBucketName,
   payerCrossAccountRoleArn,
 });
-apiStack.addDependency(agentStack);
+// Keep topological dependency — we still want AuthStack and DataStack deployed
+// before ApiStack. No longer depend on AgentStack to avoid the circular export.
+apiStack.addDependency(authStack);
+apiStack.addDependency(dataStack);
 
 // 5 — Frontend (React on S3 + CloudFront)
 const frontendStack = new FrontendStack(app, 'KostOpsFrontendStack', {

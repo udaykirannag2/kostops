@@ -85,6 +85,11 @@ def _handle_create_or_update(props: dict) -> dict:
                                               'us.anthropic.claude-sonnet-4-5-20250929-v1:0'),
         'PAYER_ACCOUNT_ID':         props.get('EnvPayerAccountId',       ''),
         'PAYER_CROSS_ACCOUNT_ROLE': props.get('EnvPayerRole',            ''),
+        # Budget Agent tables (Phase 1)
+        'SCOPES_TABLE':             props.get('EnvScopesTable',          ''),
+        'BUDGETS_TABLE':            props.get('EnvBudgetsTable',         ''),
+        'FORECASTS_TABLE':          props.get('EnvForecastsTable',       ''),
+        'SCOPE_ACTUALS_TABLE':      props.get('EnvScopeActualsTable',    ''),
     }
     # Strip empty values — AgentCore rejects empty strings in env vars
     env_vars = {k: v for k, v in env_vars.items() if v}

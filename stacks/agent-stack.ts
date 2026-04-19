@@ -12,6 +12,11 @@ import * as fs        from 'fs';
 
 interface AgentStackProps extends cdk.StackProps {
   findingsTable:              ddb.Table;
+  /** Budget Agent tables — read-only from the agent (writes go through the API). */
+  scopesTable?:               ddb.Table;
+  budgetsTable?:              ddb.Table;
+  forecastsTable?:            ddb.Table;
+  scopeActualsTable?:         ddb.Table;
   payerCurBucketName:         string;
   athenaResultsBucketName:    string;
   payerAccountId:             string;
@@ -161,6 +166,18 @@ export class AgentStack extends cdk.Stack {
 
     // DynamoDB: read + write findings
     props.findingsTable.grantReadWriteData(agentRole);
+
+    // Budget Agent — read-only from the agent. Writes go through the KostOps
+    // API so the Cognito authorizer re-validates admin role and every
+    // mutation lands a source=CHAT audit row.
+    if (props.scopesTable)       props.scopesTable.grantReadData(agentRole);
+    if (props.budgetsTable)      props.budgetsTable.grantReadData(agentRole);
+    if (props.forecastsTable)    props.forecastsTable.grantReadData(agentRole);
+    if (props.scopeActualsTable) props.scopeActualsTable.grantReadData(agentRole);
+
+    // Organizations read — list_ous / list_accounts_in_ou / list_parents.
+    // Uses the payer role (AssumePayerRole granted above) so we don't add a
+    // linked-account Organizations policy here.
 
     this.agentRoleArn = agentRole.roleArn;
 
@@ -357,6 +374,10 @@ export class AgentStack extends cdk.Stack {
         EnvBedrockModelId:     props.bedrockModelId ?? 'us.anthropic.claude-sonnet-4-5-20250929-v1:0',
         EnvPayerAccountId:     props.payerAccountId,
         EnvPayerRole:          props.payerCrossAccountRoleArn,
+        EnvScopesTable:        props.scopesTable?.tableName       ?? '',
+        EnvBudgetsTable:       props.budgetsTable?.tableName      ?? '',
+        EnvForecastsTable:     props.forecastsTable?.tableName    ?? '',
+        EnvScopeActualsTable:  props.scopeActualsTable?.tableName ?? '',
       },
     });
 
