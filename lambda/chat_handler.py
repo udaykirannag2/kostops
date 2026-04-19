@@ -178,6 +178,16 @@ def handler(event: dict, context) -> dict:
     groups  = _parse_groups(claims)
     user_id = claims.get('sub', 'anonymous')
     token   = _get_bearer(event)
+
+    # Derive the public API base URL from the incoming request context so
+    # agent write tools can call us back through API Gateway. Using the
+    # request context (not a static env var) means the same code works
+    # behind custom domains / CloudFront / stages.
+    req_ctx   = event.get('requestContext') or {}
+    stage     = req_ctx.get('stage', 'prod')
+    domain    = req_ctx.get('domainName', '')
+    api_base  = f'https://{domain}/{stage}' if domain else ''
+
     logger.info(
         f"Chat request | user={user_id[:8]}... | session={session_id} "
         f"| groups={groups} | message_len={len(message)}"
@@ -187,14 +197,15 @@ def handler(event: dict, context) -> dict:
     # can enforce role-gates and so specialist write tools can call the
     # KostOps API with the caller's JWT (pass-through, no elevation).
     agent_payload = {
-        'inputText': message,
-        'sub':       user_id,
-        'groups':    groups,
-        'claims':    {k: v for k, v in claims.items() if k in (
+        'inputText':  message,
+        'sub':        user_id,
+        'groups':     groups,
+        'claims':     {k: v for k, v in claims.items() if k in (
             'sub', 'email', 'cognito:username', 'cognito:groups',
         )},
-        'token':     token,
-        'page':      page,
+        'token':      token,
+        'apiBaseUrl': api_base,
+        'page':       page,
     }
 
     try:

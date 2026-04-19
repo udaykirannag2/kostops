@@ -32,6 +32,12 @@ except ImportError:
     def get_payer_session():  # type: ignore[misc]
         return boto3.Session()
 
+try:
+    from agents import api_client  # type: ignore
+    _HAS_API_CLIENT = True
+except ImportError:
+    _HAS_API_CLIENT = False
+
 logger = logging.getLogger(__name__)
 
 SCOPES_TABLE = os.environ.get('SCOPES_TABLE', 'kostops-scopes')
@@ -169,3 +175,105 @@ def resolve_scope_accounts(scope_id: str) -> dict:
         accounts = sorted(include - exclude)
 
     return {'scopeId': scope_id, 'accountIds': accounts, 'count': len(accounts)}
+
+
+# ── Admin write tools (go through the KostOps API) ───────────────────────────
+#
+# Rule: no DDB mutations here. Every write is a pass-through to the API so the
+# Cognito authorizer re-checks admin role and the handler emits an audit row
+# with source=CHAT. If the caller isn't admin or the token is missing, the
+# API returns 403 and we surface that verbatim to the user.
+
+def _api_result(resp: dict) -> dict:
+    """Minor convenience — let models see just status + key fields."""
+    return {
+        'status':    'ok',
+        'scopeId':   resp.get('scopeId', ''),
+        'name':      resp.get('name',    ''),
+        'scopeType': resp.get('scopeType'),
+        'updatedAt': resp.get('updatedAt', ''),
+    }
+
+
+def create_scope(
+    name:                 str,
+    scope_type:           str  = 'TEAM',
+    ou_ids:               list = None,
+    include_account_ids:  list = None,
+    exclude_account_ids:  list = None,
+    parent_scope_id:      str  = '',
+) -> dict:
+    """
+    Create a new Scope (admin only).
+
+    Args:
+        name:               human-readable scope name.
+        scope_type:         'ACCOUNT' | 'OU' | 'TEAM' | 'CUSTOM' (default 'TEAM').
+        ou_ids:             list of Organizations OU ids.
+        include_account_ids: account ids to include explicitly (merged with OU expansion).
+        exclude_account_ids: account ids to remove from the expanded set.
+        parent_scope_id:    optional parent for rollup hierarchies.
+
+    Returns: the new scope record, or {'status':'error','code':N,'detail':...}
+    on 4xx/5xx.
+    """
+    if not _HAS_API_CLIENT:
+        return {'status': 'error', 'detail': 'api_client not available on this runtime'}
+    body = {
+        'name':              name,
+        'scopeType':         scope_type,
+        'ouIds':             ou_ids              or [],
+        'includeAccountIds': include_account_ids or [],
+        'excludeAccountIds': exclude_account_ids or [],
+    }
+    if parent_scope_id:
+        body['parentScopeId'] = parent_scope_id
+    try:
+        resp = api_client.post('/scopes', body)
+        return _api_result(resp)
+    except api_client.ApiError as e:
+        return {'status': 'error', 'code': e.status, 'detail': e.message[:400]}
+
+
+def update_scope(
+    scope_id:             str,
+    name:                 str  = '',
+    scope_type:           str  = '',
+    ou_ids:               list = None,
+    include_account_ids:  list = None,
+    exclude_account_ids:  list = None,
+    parent_scope_id:      str  = '',
+) -> dict:
+    """
+    Update an existing Scope (admin only). Empty / null fields are left
+    unchanged except for ou_ids / include_account_ids / exclude_account_ids
+    which are fully replaced when provided.
+    """
+    if not _HAS_API_CLIENT:
+        return {'status': 'error', 'detail': 'api_client not available on this runtime'}
+    body: dict = {}
+    if name:            body['name']            = name
+    if scope_type:      body['scopeType']       = scope_type
+    if ou_ids is not None:              body['ouIds']             = ou_ids
+    if include_account_ids is not None: body['includeAccountIds'] = include_account_ids
+    if exclude_account_ids is not None: body['excludeAccountIds'] = exclude_account_ids
+    if parent_scope_id: body['parentScopeId']   = parent_scope_id
+    try:
+        resp = api_client.put(f'/scopes/{scope_id}', body)
+        return _api_result(resp)
+    except api_client.ApiError as e:
+        return {'status': 'error', 'code': e.status, 'detail': e.message[:400]}
+
+
+def archive_scope(scope_id: str) -> dict:
+    """
+    Soft-delete a Scope by flipping its status to 'archived' (admin only).
+    History is retained so rollup queries can still run on older periods.
+    """
+    if not _HAS_API_CLIENT:
+        return {'status': 'error', 'detail': 'api_client not available on this runtime'}
+    try:
+        resp = api_client.delete(f'/scopes/{scope_id}')
+        return {'status': 'ok', 'scopeId': scope_id, 'newStatus': resp.get('status', 'archived')}
+    except api_client.ApiError as e:
+        return {'status': 'error', 'code': e.status, 'detail': e.message[:400]}

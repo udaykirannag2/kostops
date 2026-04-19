@@ -40,7 +40,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 logger.info(f"[startup] imports starting at {_elapsed()}")
 
-from agents import supervisor  # noqa: E402
+from agents import supervisor, api_client  # noqa: E402
 
 logger.info(f"[startup] supervisor imported at {_elapsed()}")
 
@@ -85,17 +85,25 @@ class _AgentCoreHandler(BaseHTTPRequestHandler):
             self._send_json(200, {'output': 'No message provided.'})
             return
 
-        # Build ctx from optional caller-forwarded fields. All four are optional;
+        # Build ctx from optional caller-forwarded fields. All five are optional;
         # supervisor handles missing values by defaulting to viewer-read-only.
         ctx = {
-            'claims': payload.get('claims') or {},
-            'groups': payload.get('groups') or [],
-            'sub':    payload.get('sub')    or '',
-            'token':  payload.get('token')  or '',
-            'page':   payload.get('page')   or {},
+            'claims':     payload.get('claims')     or {},
+            'groups':     payload.get('groups')     or [],
+            'sub':        payload.get('sub')        or '',
+            'token':      payload.get('token')      or '',
+            'apiBaseUrl': payload.get('apiBaseUrl') or '',
+            'page':       payload.get('page')       or {},
         }
 
-        logger.info(f"Invocation | message_len={len(message)} | has_token={bool(ctx['token'])}")
+        logger.info(
+            f"Invocation | message_len={len(message)} "
+            f"| has_token={bool(ctx['token'])} | has_apiUrl={bool(ctx['apiBaseUrl'])}"
+        )
+        # Bind caller identity + API URL for any write tools the specialists invoke.
+        # The binding is thread-local; ThreadingMixIn gives each request its own
+        # thread, so concurrent invocations don't leak credentials.
+        api_client.set_caller(token=ctx['token'], api_base_url=ctx['apiBaseUrl'])
         try:
             reply = supervisor.dispatch(message, ctx)
             logger.info(f"Invocation done | reply_len={len(reply)}")
@@ -103,6 +111,8 @@ class _AgentCoreHandler(BaseHTTPRequestHandler):
         except Exception as e:
             logger.exception("Supervisor dispatch failed")
             self._send_json(500, {'output': f'Agent error: {e}'})
+        finally:
+            api_client.clear_caller()
 
 
 class _ThreadedHTTPServer(ThreadingMixIn, HTTPServer):

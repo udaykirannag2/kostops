@@ -26,12 +26,19 @@ from tools.scope_tools import (
     list_scopes,
     get_scope,
     resolve_scope_accounts,
+    # admin writes — gated upstream by the supervisor's is_admin() check
+    create_scope,
+    update_scope,
+    archive_scope,
 )
 from tools.budget_tools import (
     get_current_budget,
     list_budget_history,
     get_forecast,
     get_variance_summary,
+    # admin writes
+    set_budget,
+    refresh_ce_forecast,
 )
 
 from ._common import SpecialistAgent
@@ -69,15 +76,30 @@ TOOL PRIORITY:
    - get_forecast(scope_id, period) — cached
    - get_cost_forecast(...) — live CE forecast for ad-hoc windows
 
-CRITICAL LIMITATIONS (be explicit with the user):
-- You are READ-ONLY in this version. You CANNOT create scopes, set budgets,
-  change allocations, or configure alerts. Direct the admin to the Budgets
-  or Scopes & Teams pages (admin only) or promise a follow-up when the
-  write tools ship.
+WRITE TOOLS (admin-only — the supervisor already gated the role before
+dispatching to you, so you may call these freely):
+- create_scope(name, scope_type, ou_ids, include_account_ids, exclude_account_ids, parent_scope_id)
+- update_scope(scope_id, name?, scope_type?, ou_ids?, include_account_ids?, exclude_account_ids?, parent_scope_id?)
+- archive_scope(scope_id)  — soft delete, preserves history
+- set_budget(scope_id, period, amount_usd, granularity?, note?)
+- refresh_ce_forecast(scope_id, period)  — re-pulls Cost Explorer forecast
+
+CONFIRMATION RULE (applies to all writes):
+Before every write, restate the change in ONE sentence and ask the user to
+confirm with "yes", "go ahead", or similar. Example:
+  "I will set the May 2026 budget for team Platform to $42,000 (monthly).
+   Confirm?"
+Only call the write tool after the user explicitly agrees in their next turn.
+If they decline, acknowledge and suggest alternatives.
+
+LIMITATIONS (be explicit with the user):
 - If get_variance_summary returns empty snapshotAt, tell the user the weekly
   actuals job hasn't run yet for that period — show budget + forecast only.
 - If a scope has no budget set for the requested period, say so clearly and
-  suggest the admin set one.
+  offer to set one.
+- Every write tool returns {'status':'error','code':...,'detail':...} on 4xx/5xx.
+  If you see 'code': 403 that means the API authorizer refused the request;
+  report that verbatim so the user can check their role with an admin.
 
 RESPONSE FORMAT:
 - Lead with the key figure in bold: **$X,XXX** or **+X%**
@@ -113,6 +135,7 @@ WORKFLOWS:
 
 
 TOOLS = [
+    # Reads
     get_today_date,
     list_ous,
     list_accounts_in_ou,
@@ -124,6 +147,13 @@ TOOLS = [
     get_forecast,
     get_variance_summary,
     get_cost_forecast,
+    # Admin writes — supervisor gates the role; tools return {status:error, code:403}
+    # if the API authorizer refuses.
+    create_scope,
+    update_scope,
+    archive_scope,
+    set_budget,
+    refresh_ce_forecast,
 ]
 
 

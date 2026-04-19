@@ -48,8 +48,18 @@ SPECIALISTS: Dict[str, Dict] = {
     },
     'budget': {
         'handler': budget.handle,
-        # Slice B.1 ships read-only budget tools; flip to True when set_budget
-        # / create_scope land in Slice B.2.
+        # Budget specialist owns BOTH read tools (safe for viewers) and admin
+        # write tools. We deliberately do NOT gate the specialist at the
+        # supervisor layer: viewers asking "what's my budget?" would be
+        # blocked unfairly. Instead, layered defence runs here:
+        #   1. UI hides admin buttons for viewers.
+        #   2. The agent's write tools (set_budget, create_scope, ...) POST to
+        #      the KostOps API with the caller's JWT; the Cognito authorizer
+        #      rejects non-admin calls with 403 and the tool surfaces the
+        #      error verbatim to the user.
+        #   3. Audit trail captures every attempted write with source=CHAT.
+        # So 'write: False' here is intentional -- it reflects "don't refuse
+        # at dispatch", not "no writes exist".
         'write':   False,
     },
     # 'optimization': {'handler': optimization.handle, 'write': False},  # Phase 4

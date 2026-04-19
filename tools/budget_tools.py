@@ -25,6 +25,12 @@ from typing import Optional
 import boto3
 from boto3.dynamodb.conditions import Key, Attr
 
+try:
+    from agents import api_client  # type: ignore
+    _HAS_API_CLIENT = True
+except ImportError:
+    _HAS_API_CLIENT = False
+
 logger = logging.getLogger(__name__)
 
 BUDGETS_TABLE        = os.environ.get('BUDGETS_TABLE',       'kostops-budgets')
@@ -173,3 +179,76 @@ def get_variance_summary(scope_id: str, period: str) -> dict:
         'snapshotAt':  actuals_row.get('snapshotAt', ''),
         'budgetSet':   bool(budget_row),
     }
+
+
+# ── Admin write tools (go through the KostOps API) ───────────────────────────
+
+def set_budget(
+    scope_id:     str,
+    period:       str,
+    amount_usd:   float,
+    granularity:  str  = '',
+    note:         str  = '',
+) -> dict:
+    """
+    Create a new budget version for (scope, period). Admin only.
+
+    The API handler flips the previous current version's isCurrent=false in a
+    DynamoDB transaction and emits a BUDGET UPDATE audit row. History is
+    preserved — every set_budget creates a new row rather than overwriting.
+
+    Args:
+        scope_id:    existing scope id (get it from list_scopes).
+        period:      YYYY-MM for monthly, YYYY-Qn for quarterly (e.g. "2026-Q2").
+        amount_usd:  planned spend in USD (float).
+        granularity: 'MONTHLY' or 'QUARTERLY'. Defaults from the period shape.
+        note:        optional free-text note (max 512 chars, recorded on the row).
+
+    Returns: the new budget version, or {'status':'error','code':N,'detail':...}
+    on 4xx/5xx.
+    """
+    if not _HAS_API_CLIENT:
+        return {'status': 'error', 'detail': 'api_client not available on this runtime'}
+    body: dict = {
+        'amountUsd': float(amount_usd),
+        'note':      note,
+    }
+    if granularity:
+        body['granularity'] = granularity.upper()
+    try:
+        resp = api_client.put(f'/budgets/{scope_id}/{period}', body)
+        return {
+            'status':      'ok',
+            'scopeId':     scope_id,
+            'period':      period,
+            'version':     int(resp.get('version', 0)),
+            'amountUsd':   _to_float(resp.get('amountUsd')),
+            'granularity': resp.get('granularity', ''),
+            'createdAt':   resp.get('createdAt', ''),
+        }
+    except api_client.ApiError as e:
+        return {'status': 'error', 'code': e.status, 'detail': e.message[:400]}
+
+
+def refresh_ce_forecast(scope_id: str, period: str) -> dict:
+    """
+    Refresh the cached CE_FORECAST for (scope, period). Admin only.
+
+    Calls Cost Explorer GetCostForecast with the scope's effective accounts
+    as a LINKED_ACCOUNT filter. The period window must include a future date
+    (CE won't forecast entirely-past windows).
+    """
+    if not _HAS_API_CLIENT:
+        return {'status': 'error', 'detail': 'api_client not available on this runtime'}
+    try:
+        resp = api_client.post(f'/forecasts/{scope_id}/{period}', {})
+        return {
+            'status':      'ok',
+            'scopeId':     scope_id,
+            'period':      period,
+            'amountUsd':   _to_float(resp.get('amountUsd')),
+            'generatedAt': resp.get('generatedAt', ''),
+            'inputs':      resp.get('inputs', {}),
+        }
+    except api_client.ApiError as e:
+        return {'status': 'error', 'code': e.status, 'detail': e.message[:400]}
