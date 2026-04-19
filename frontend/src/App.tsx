@@ -1,13 +1,13 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import type { AuthUser } from 'aws-amplify/auth';
 import AppShell from './components/layout/AppShell';
-import EmbedPage from './components/cost/EmbedPage';
 import Chat from './components/Chat';
 import Findings from './components/Findings';
 import Integrations from './components/Integrations';
 import PlaceholderFromNav from './pages/PlaceholderFromNav';
 import MembersPage from './pages/settings/MembersPage';
 import { AdminRoute } from './auth/AdminRoute';
+import { NativeDashboard } from './components/visibility/NativeDashboard';
 
 interface AppProps {
   signOut?: () => void;
@@ -24,15 +24,15 @@ export default function App({ signOut, user }: AppProps) {
           <Route index element={<Navigate to="/visibility/billing-summary" replace />} />
 
           {/* Cost Visibility */}
-          <Route path="/visibility/billing-summary" element={<EmbedPage dashboard="billing-summary" />} />
-          <Route path="/visibility/compute"         element={<EmbedPage dashboard="compute" />} />
-          <Route path="/visibility/storage"         element={<EmbedPage dashboard="storage" />} />
-          <Route path="/visibility/ai-ml"           element={<EmbedPage dashboard="ai-ml" />} />
+          <Route path="/visibility/billing-summary" element={<NativeDashboard type="billing-summary" />} />
+          <Route path="/visibility/compute"         element={<NativeDashboard type="compute" />} />
+          <Route path="/visibility/storage"         element={<NativeDashboard type="storage" />} />
+          <Route path="/visibility/ai-ml"           element={<NativeDashboard type="ai-ml" />} />
 
           {/* Optimization */}
           <Route path="/optimization/opportunities"         element={<Findings />} />
-          <Route path="/optimization/coverage-commitments"  element={<EmbedPage dashboard="commitments" />} />
-          <Route path="/optimization/rightsizing"           element={<EmbedPage dashboard="rightsizing" />} />
+          <Route path="/optimization/coverage-commitments"  element={<NativeDashboard type="commitments" />} />
+          <Route path="/optimization/rightsizing"           element={<NativeDashboard type="rightsizing" />} />
           <Route path="/optimization/savings-tracker"       element={<PlaceholderFromNav />} />
           <Route path="/optimization/recommendations"       element={<PlaceholderFromNav />} />
 

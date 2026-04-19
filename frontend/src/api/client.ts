@@ -191,6 +191,79 @@ export function getMonthlySpend(): Promise<MonthlySpendResponse> {
   return apiFetch<MonthlySpendResponse>('/dashboard/monthly-spend');
 }
 
+// ── Visibility (native dashboards) ────────────────────────────────────────────
+
+export type DashboardType =
+  | 'billing-summary'
+  | 'compute'
+  | 'storage'
+  | 'ai-ml'
+  | 'commitments'
+  | 'rightsizing';
+
+export interface AccountOption {
+  id:      string;
+  name:    string;
+  email?:  string;
+  ouId?:   string;
+  ouName?: string;
+}
+export interface OuOption   { id: string; name: string; parentId?: string }
+
+export interface VisibilityFilters {
+  accounts: AccountOption[];
+  ous:      OuOption[];
+  periods:  string[];   // YYYY-MM
+}
+
+export interface DashboardPanel {
+  id:    string;
+  title: string;
+  kind:  'bar' | 'line' | 'table' | 'error';
+  data:  Array<Record<string, unknown>>;
+  error?: string;
+}
+export interface VisibilityDashboard {
+  type:   DashboardType;
+  panels: DashboardPanel[];
+}
+
+export interface VisibilityFilterSelection {
+  linkedAccountIds?: string[];
+  accountIds?:       string[];   // resolved from account-name dropdown
+  ouIds?:            string[];
+  startPeriod?:      string;     // YYYY-MM
+  endPeriod?:        string;     // YYYY-MM
+}
+
+function _qs(params: VisibilityFilterSelection): string {
+  const parts: string[] = [];
+  const push = (k: string, v?: string[] | string) => {
+    if (!v) return;
+    const s = Array.isArray(v) ? v.join(',') : v;
+    if (s) parts.push(`${encodeURIComponent(k)}=${encodeURIComponent(s)}`);
+  };
+  push('linkedAccountIds', params.linkedAccountIds);
+  push('accountIds',       params.accountIds);
+  push('ouIds',            params.ouIds);
+  push('startPeriod',      params.startPeriod);
+  push('endPeriod',        params.endPeriod);
+  return parts.length ? `&${parts.join('&')}` : '';
+}
+
+export function listVisibilityFilters(): Promise<VisibilityFilters> {
+  return apiFetch<VisibilityFilters>('/visibility/filters');
+}
+
+export function getVisibilityDashboard(
+  type:    DashboardType,
+  filters: VisibilityFilterSelection = {},
+): Promise<VisibilityDashboard> {
+  return apiFetch<VisibilityDashboard>(
+    `/visibility/dashboard?type=${encodeURIComponent(type)}${_qs(filters)}`,
+  );
+}
+
 // ── Members (admin-only) ──────────────────────────────────────────────────────
 
 export type MemberRole = 'admin' | 'viewer';

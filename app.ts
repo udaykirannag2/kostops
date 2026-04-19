@@ -71,16 +71,17 @@ agentStack.addDependency(dataStack);
 // the keepwarm Lambda (chat-handler gets it via update_references in Lambda).
 const apiStack = new ApiStack(app, 'KostOpsApiStack', {
   env,
-  findingsTable:           dataStack.findingsTable,
-  integrationsTable:       dataStack.integrationsTable,
-  conversationsTable:      dataStack.conversationsTable,
-  auditEventsTable:        dataStack.auditEventsTable,
-  agentEndpointUrl:        agentStack.agentEndpointUrl,
-  agentRuntimeArn:         agentStack.agentRuntimeArn,
-  userPool:                authStack.userPool,
+  findingsTable:             dataStack.findingsTable,
+  integrationsTable:         dataStack.integrationsTable,
+  conversationsTable:        dataStack.conversationsTable,
+  auditEventsTable:          dataStack.auditEventsTable,
+  agentEndpointUrl:          agentStack.agentEndpointUrl,
+  agentRuntimeArn:           agentStack.agentRuntimeArn,
+  userPool:                  authStack.userPool,
   slackWebhookUrl,
-  athenaWorkgroup:         'kostops-workgroup',
-  athenaResultsBucketName: dataStack.athenaResultsBucketName,
+  athenaWorkgroup:           'kostops-workgroup',
+  athenaResultsBucketName:   dataStack.athenaResultsBucketName,
+  payerCrossAccountRoleArn,
 });
 apiStack.addDependency(agentStack);
 

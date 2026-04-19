@@ -20,6 +20,8 @@ interface ApiStackProps extends cdk.StackProps {
   athenaWorkgroup:         string;
   athenaResultsBucketName: string;
   agentRuntimeArn:         string;
+  /** Payer cross-account role — visibility handler assumes this to call Organizations */
+  payerCrossAccountRoleArn?: string;
 }
 
 /**
@@ -82,6 +84,16 @@ export class ApiStack extends cdk.Stack {
       resources: ['*'],
     }));
 
+    // Assume the payer cross-account role so the visibility handler can call
+    // Organizations (list accounts, OUs, parents) to build the filter dropdowns.
+    if (props.payerCrossAccountRoleArn) {
+      lambdaRole.addToPolicy(new iam.PolicyStatement({
+        sid:       'AssumePayerRoleForOrgLookups',
+        actions:   ['sts:AssumeRole'],
+        resources: [props.payerCrossAccountRoleArn],
+      }));
+    }
+
     // ── Common Lambda environment variables ───────────────────────────────────
     // Athena permissions for dashboard-handler
     lambdaRole.addToPolicy(new iam.PolicyStatement({
@@ -100,20 +112,21 @@ export class ApiStack extends cdk.Stack {
     }));
 
     const commonEnv: Record<string, string> = {
-      FINDINGS_TABLE:          props.findingsTable.tableName,
-      INTEGRATIONS_TABLE:      props.integrationsTable.tableName,
-      CONVERSATIONS_TABLE:     props.conversationsTable.tableName,
-      AUDIT_TABLE:             props.auditEventsTable.tableName,
-      USER_POOL_ID:            props.userPool.userPoolId,
-      AGENT_ENDPOINT_URL:      props.agentEndpointUrl,
-      AGENT_RUNTIME_ARN:       props.agentRuntimeArn,
-      SLACK_WEBHOOK_URL:       props.slackWebhookUrl,   // fallback; prefer SSM
-      ATHENA_WORKGROUP:        props.athenaWorkgroup,
-      ATHENA_RESULTS_BUCKET:   props.athenaResultsBucketName,
-      GLUE_DATABASE:           'kostops_cur',
-      CUR_TABLE:               'data',
-      POWERTOOLS_SERVICE_NAME: 'kostops-api',
-      LOG_LEVEL:               'INFO',
+      FINDINGS_TABLE:            props.findingsTable.tableName,
+      INTEGRATIONS_TABLE:        props.integrationsTable.tableName,
+      CONVERSATIONS_TABLE:       props.conversationsTable.tableName,
+      AUDIT_TABLE:               props.auditEventsTable.tableName,
+      USER_POOL_ID:              props.userPool.userPoolId,
+      AGENT_ENDPOINT_URL:        props.agentEndpointUrl,
+      AGENT_RUNTIME_ARN:         props.agentRuntimeArn,
+      SLACK_WEBHOOK_URL:         props.slackWebhookUrl,   // fallback; prefer SSM
+      ATHENA_WORKGROUP:          props.athenaWorkgroup,
+      ATHENA_RESULTS_BUCKET:     props.athenaResultsBucketName,
+      GLUE_DATABASE:             'kostops_cur',
+      CUR_TABLE:                 'data',
+      PAYER_CROSS_ACCOUNT_ROLE:  props.payerCrossAccountRoleArn ?? '',
+      POWERTOOLS_SERVICE_NAME:   'kostops-api',
+      LOG_LEVEL:                 'INFO',
     };
 
     // Members handler gets a dedicated role so its Cognito admin permissions
@@ -262,6 +275,22 @@ export class ApiStack extends cdk.Stack {
       role:          lambdaRole,
       timeout:       cdk.Duration.seconds(120), // Athena queries can take up to 2 min
       memorySize:    128,
+      environment:   commonEnv,
+      logRetention:  logs.RetentionDays.TWO_WEEKS,
+    });
+
+    // ── Lambda: visibility-handler ────────────────────────────────────────────
+    // Serves the native Cost Visibility dashboards (Recharts). Replaces the
+    // QuickSight embed flow. Handles both /visibility/filters (dropdown options)
+    // and /visibility/dashboard (panels filtered by linked account / OU / period).
+    const visibilityHandler = new lambda.Function(this, 'VisibilityHandler', {
+      functionName:  'kostops-visibility-handler',
+      runtime:       lambda.Runtime.PYTHON_3_12,
+      handler:       'visibility_handler.handler',
+      code:          lambda.Code.fromAsset('lambda'),
+      role:          lambdaRole,
+      timeout:       cdk.Duration.seconds(120),
+      memorySize:    256,  // OU walk + multiple Athena queries
       environment:   commonEnv,
       logRetention:  logs.RetentionDays.TWO_WEEKS,
     });
@@ -459,6 +488,23 @@ export class ApiStack extends cdk.Stack {
     monthlySpendResource.addMethod(
       'GET',
       new apigateway.LambdaIntegration(dashboardHandler, { proxy: true }),
+      authOptions,
+    );
+
+    // /visibility — native Cost Visibility dashboards (replaces QuickSight embed)
+    //   GET /visibility/filters       → dropdown options
+    //   GET /visibility/dashboard     → filtered panels (type=billing-summary|…)
+    const visibilityResource        = api.root.addResource('visibility');
+    const filtersResource           = visibilityResource.addResource('filters');
+    filtersResource.addMethod(
+      'GET',
+      new apigateway.LambdaIntegration(visibilityHandler, { proxy: true }),
+      authOptions,
+    );
+    const visibilityDashResource    = visibilityResource.addResource('dashboard');
+    visibilityDashResource.addMethod(
+      'GET',
+      new apigateway.LambdaIntegration(visibilityHandler, { proxy: true }),
       authOptions,
     );
 
