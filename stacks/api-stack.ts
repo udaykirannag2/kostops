@@ -116,8 +116,21 @@ export class ApiStack extends cdk.Stack {
       LOG_LEVEL:               'INFO',
     };
 
-    // Cognito group management for the Members page (admin only at handler layer)
-    lambdaRole.addToPolicy(new iam.PolicyStatement({
+    // Members handler gets a dedicated role so its Cognito admin permissions
+    // don't get mingled with the shared lambdaRole's default policy. Sharing
+    // lambdaRole would combine with the pre-existing slack-command-handler
+    // SelfInvoke statement (lambdaRole → slackCommandHandler.functionArn) and
+    // cause CFN to flag a circular dependency when any additional handler is
+    // introduced that also targets lambdaRole.
+    const membersRole = new iam.Role(this, 'MembersLambdaRole', {
+      assumedBy:   new iam.ServicePrincipal('lambda.amazonaws.com'),
+      description: 'Execution role for members_handler — Cognito group mgmt + audit writes',
+      managedPolicies: [
+        iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaBasicExecutionRole'),
+      ],
+    });
+    props.auditEventsTable.grantReadWriteData(membersRole);
+    membersRole.addToPolicy(new iam.PolicyStatement({
       sid:     'CognitoMembersAdmin',
       actions: [
         'cognito-idp:AdminCreateUser',
@@ -219,13 +232,15 @@ export class ApiStack extends cdk.Stack {
     }));
 
     // ── Lambda: members-handler ───────────────────────────────────────────────
-    // Admin-only Cognito group management for the Members page.
+    // Admin-only Cognito group management for the Members page. Uses its own
+    // role (see membersRole above) to avoid participating in the shared
+    // lambdaRole cycle triggered by the slack-command-handler SelfInvoke.
     const membersHandler = new lambda.Function(this, 'MembersHandler', {
       functionName:  'kostops-members-handler',
       runtime:       lambda.Runtime.PYTHON_3_12,
       handler:       'members_handler.handler',
       code:          lambda.Code.fromAsset('lambda'),
-      role:          lambdaRole,
+      role:          membersRole,
       timeout:       cdk.Duration.seconds(30),
       memorySize:    128,
       environment:   commonEnv,
