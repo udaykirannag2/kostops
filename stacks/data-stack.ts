@@ -49,6 +49,13 @@ export class DataStack extends cdk.Stack {
   /** Audit events table — immutable mutation log (RBAC governance) */
   public readonly auditEventsTable: ddb.Table;
 
+  /** Budget Agent tables (Phase 1) — scope definitions and budget versions */
+  public readonly scopesTable:      ddb.Table;
+  public readonly budgetsTable:     ddb.Table;
+  public readonly forecastsTable:   ddb.Table;
+  public readonly scopeActualsTable: ddb.Table;
+  public readonly importJobsTable:  ddb.Table;
+
   /** Athena results bucket name — passed to AgentStack for write permissions */
   public readonly athenaResultsBucketName: string;
 
@@ -371,6 +378,86 @@ export class DataStack extends cdk.Stack {
       projectionType: ddb.ProjectionType.ALL,
     });
 
+    // ── 8. Budget Agent tables (Phase 1) ─────────────────────────────────────
+    //
+    // Scopes — admin-defined groupings (OU, TEAM hybrid, ACCOUNT, CUSTOM).
+    //   pk: scopeId
+    //   attrs: name, scopeType, ouIds[], includeAccountIds[], excludeAccountIds[],
+    //          parentScopeId, ownerSub, status (active|archived), createdAt, updatedAt
+    //   GSI byParent: query children of a scope for rollups
+    this.scopesTable = new ddb.Table(this, 'ScopesTable', {
+      tableName:    'kostops-scopes',
+      partitionKey: { name: 'scopeId', type: ddb.AttributeType.STRING },
+      billingMode:  ddb.BillingMode.PAY_PER_REQUEST,
+      encryption:   ddb.TableEncryption.AWS_MANAGED,
+      pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+      stream:        ddb.StreamViewType.NEW_AND_OLD_IMAGES, // feeds Athena export later
+    });
+    this.scopesTable.addGlobalSecondaryIndex({
+      indexName:     'byParent',
+      partitionKey:  { name: 'parentScopeId', type: ddb.AttributeType.STRING },
+      sortKey:       { name: 'scopeId',       type: ddb.AttributeType.STRING },
+      projectionType: ddb.ProjectionType.ALL,
+    });
+
+    // Budgets — versioned per (scopeId, period). Never overwritten; each write
+    // creates a new SK `period#version` row and flips isCurrent on the prior
+    // current row via a DynamoDB transaction.
+    //   pk: scopeId
+    //   sk: period#version   (e.g. "2026-05#v3" or "2026-Q2#v1")
+    //   attrs: amountUsd, granularity (MONTHLY|QUARTERLY), currency,
+    //          createdBy, createdAt, note, isCurrent (boolean)
+    //   GSI byCurrent: find the current version per (scopeId, period)
+    this.budgetsTable = new ddb.Table(this, 'BudgetsTable', {
+      tableName:    'kostops-budgets',
+      partitionKey: { name: 'scopeId', type: ddb.AttributeType.STRING },
+      sortKey:      { name: 'sk',      type: ddb.AttributeType.STRING },
+      billingMode:  ddb.BillingMode.PAY_PER_REQUEST,
+      encryption:   ddb.TableEncryption.AWS_MANAGED,
+      pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+
+    // Forecasts — separate entity from Budget, not destructively overwritten.
+    //   pk: scopeId
+    //   sk: period#sourceMethod (e.g. "2026-05#CE_FORECAST")
+    //   attrs: amountUsd, generatedAt, inputs (map)
+    this.forecastsTable = new ddb.Table(this, 'ForecastsTable', {
+      tableName:    'kostops-forecasts',
+      partitionKey: { name: 'scopeId', type: ddb.AttributeType.STRING },
+      sortKey:      { name: 'sk',      type: ddb.AttributeType.STRING },
+      billingMode:  ddb.BillingMode.PAY_PER_REQUEST,
+      encryption:   ddb.TableEncryption.AWS_MANAGED,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+
+    // ScopeActuals — weekly-refresh snapshot (budget_refresh_handler in Phase 1.5+).
+    //   pk: scopeId
+    //   sk: period (YYYY-MM or YYYY-Qn)
+    //   attrs: actualUsd, forecastUsd, variancePct, topDrivers[], snapshotAt
+    this.scopeActualsTable = new ddb.Table(this, 'ScopeActualsTable', {
+      tableName:    'kostops-scope-actuals',
+      partitionKey: { name: 'scopeId', type: ddb.AttributeType.STRING },
+      sortKey:      { name: 'period',  type: ddb.AttributeType.STRING },
+      billingMode:  ddb.BillingMode.PAY_PER_REQUEST,
+      encryption:   ddb.TableEncryption.AWS_MANAGED,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+
+    // ImportJobs — CSV budget template upload / preview / commit lifecycle.
+    //   pk: jobId
+    //   attrs: uploadedBy, s3Key, status (PENDING|PREVIEWED|APPLIED|FAILED),
+    //          rowCount, errorCount, preview (map), appliedAt, ttl
+    this.importJobsTable = new ddb.Table(this, 'ImportJobsTable', {
+      tableName:    'kostops-budget-import-jobs',
+      partitionKey: { name: 'jobId', type: ddb.AttributeType.STRING },
+      billingMode:  ddb.BillingMode.PAY_PER_REQUEST,
+      encryption:   ddb.TableEncryption.AWS_MANAGED,
+      timeToLiveAttribute: 'ttl',   // preview rows expire after 7 days
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
     // ── Outputs ───────────────────────────────────────────────────────────────
     new cdk.CfnOutput(this, 'AthenaResultsBucketName', {
       value:       athenaResultsBucket.bucketName,
@@ -383,6 +470,14 @@ export class DataStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'AuditEventsTableName', {
       value:       this.auditEventsTable.tableName,
       description: 'DynamoDB audit events table',
+    });
+    new cdk.CfnOutput(this, 'ScopesTableName', {
+      value:       this.scopesTable.tableName,
+      description: 'DynamoDB scopes table (Budget Agent)',
+    });
+    new cdk.CfnOutput(this, 'BudgetsTableName', {
+      value:       this.budgetsTable.tableName,
+      description: 'DynamoDB budgets table (versioned)',
     });
     new cdk.CfnOutput(this, 'AthenaWorkgroup', {
       value:       'kostops-workgroup',

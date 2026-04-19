@@ -14,6 +14,11 @@ interface ApiStackProps extends cdk.StackProps {
   integrationsTable:       ddb.Table;
   conversationsTable:      ddb.Table;
   auditEventsTable:        ddb.Table;
+  scopesTable:             ddb.Table;
+  budgetsTable:            ddb.Table;
+  forecastsTable:          ddb.Table;
+  scopeActualsTable:       ddb.Table;
+  importJobsTable:         ddb.Table;
   agentEndpointUrl:        string;
   userPool:                cognito.UserPool;
   slackWebhookUrl:         string;
@@ -64,6 +69,12 @@ export class ApiStack extends cdk.Stack {
     props.conversationsTable.grantReadWriteData(lambdaRole);
     // Every mutation handler appends to the audit log — shared role needs write access
     props.auditEventsTable.grantReadWriteData(lambdaRole);
+    // Budget Agent tables (Phase 1)
+    props.scopesTable.grantReadWriteData(lambdaRole);
+    props.budgetsTable.grantReadWriteData(lambdaRole);
+    props.forecastsTable.grantReadWriteData(lambdaRole);
+    props.scopeActualsTable.grantReadWriteData(lambdaRole);
+    props.importJobsTable.grantReadWriteData(lambdaRole);
 
     // SSM access for integrations-handler and slack-handler (read/write secrets)
     lambdaRole.addToPolicy(new iam.PolicyStatement({
@@ -116,6 +127,11 @@ export class ApiStack extends cdk.Stack {
       INTEGRATIONS_TABLE:        props.integrationsTable.tableName,
       CONVERSATIONS_TABLE:       props.conversationsTable.tableName,
       AUDIT_TABLE:               props.auditEventsTable.tableName,
+      SCOPES_TABLE:              props.scopesTable.tableName,
+      BUDGETS_TABLE:             props.budgetsTable.tableName,
+      FORECASTS_TABLE:           props.forecastsTable.tableName,
+      SCOPE_ACTUALS_TABLE:       props.scopeActualsTable.tableName,
+      IMPORT_JOBS_TABLE:         props.importJobsTable.tableName,
       USER_POOL_ID:              props.userPool.userPoolId,
       AGENT_ENDPOINT_URL:        props.agentEndpointUrl,
       AGENT_RUNTIME_ARN:         props.agentRuntimeArn,
@@ -274,6 +290,45 @@ export class ApiStack extends cdk.Stack {
       code:          lambda.Code.fromAsset('lambda'),
       role:          lambdaRole,
       timeout:       cdk.Duration.seconds(120), // Athena queries can take up to 2 min
+      memorySize:    128,
+      environment:   commonEnv,
+      logRetention:  logs.RetentionDays.TWO_WEEKS,
+    });
+
+    // ── Lambda: scopes-handler (Budget Agent, Phase 1) ────────────────────────
+    const scopesHandler = new lambda.Function(this, 'ScopesHandler', {
+      functionName:  'kostops-scopes-handler',
+      runtime:       lambda.Runtime.PYTHON_3_12,
+      handler:       'scopes_handler.handler',
+      code:          lambda.Code.fromAsset('lambda'),
+      role:          lambdaRole,
+      timeout:       cdk.Duration.seconds(30),
+      memorySize:    256,  // OU walk caches live in-memory
+      environment:   commonEnv,
+      logRetention:  logs.RetentionDays.TWO_WEEKS,
+    });
+
+    // ── Lambda: budgets-handler ──────────────────────────────────────────────
+    const budgetsHandler = new lambda.Function(this, 'BudgetsHandler', {
+      functionName:  'kostops-budgets-handler',
+      runtime:       lambda.Runtime.PYTHON_3_12,
+      handler:       'budgets_handler.handler',
+      code:          lambda.Code.fromAsset('lambda'),
+      role:          lambdaRole,
+      timeout:       cdk.Duration.seconds(30),
+      memorySize:    128,
+      environment:   commonEnv,
+      logRetention:  logs.RetentionDays.TWO_WEEKS,
+    });
+
+    // ── Lambda: forecasts-handler ────────────────────────────────────────────
+    const forecastsHandler = new lambda.Function(this, 'ForecastsHandler', {
+      functionName:  'kostops-forecasts-handler',
+      runtime:       lambda.Runtime.PYTHON_3_12,
+      handler:       'forecasts_handler.handler',
+      code:          lambda.Code.fromAsset('lambda'),
+      role:          lambdaRole,
+      timeout:       cdk.Duration.seconds(30),
       memorySize:    128,
       environment:   commonEnv,
       logRetention:  logs.RetentionDays.TWO_WEEKS,
@@ -488,6 +543,82 @@ export class ApiStack extends cdk.Stack {
     monthlySpendResource.addMethod(
       'GET',
       new apigateway.LambdaIntegration(dashboardHandler, { proxy: true }),
+      authOptions,
+    );
+
+    // /scopes — Budget Agent scope CRUD (Phase 1)
+    const scopesResource     = api.root.addResource('scopes');
+    scopesResource.addMethod(
+      'GET',
+      new apigateway.LambdaIntegration(scopesHandler, { proxy: true }),
+      authOptions,
+    );
+    scopesResource.addMethod(
+      'POST',
+      new apigateway.LambdaIntegration(scopesHandler, { proxy: true }),
+      authOptions,
+    );
+    const scopeResource      = scopesResource.addResource('{scopeId}');
+    scopeResource.addMethod(
+      'GET',
+      new apigateway.LambdaIntegration(scopesHandler, { proxy: true }),
+      authOptions,
+    );
+    scopeResource.addMethod(
+      'PUT',
+      new apigateway.LambdaIntegration(scopesHandler, { proxy: true }),
+      authOptions,
+    );
+    scopeResource.addMethod(
+      'DELETE',
+      new apigateway.LambdaIntegration(scopesHandler, { proxy: true }),
+      authOptions,
+    );
+    const effAccountsResource = scopeResource.addResource('effective-accounts');
+    effAccountsResource.addMethod(
+      'GET',
+      new apigateway.LambdaIntegration(scopesHandler, { proxy: true }),
+      authOptions,
+    );
+
+    // /budgets — versioned budget CRUD (Phase 1)
+    //   GET /budgets?scopeId=&period=             current version
+    //   GET /budgets/{scopeId}/history            all versions
+    //   PUT /budgets/{scopeId}/{period}           new version (admin)
+    const budgetsResource       = api.root.addResource('budgets');
+    budgetsResource.addMethod(
+      'GET',
+      new apigateway.LambdaIntegration(budgetsHandler, { proxy: true }),
+      authOptions,
+    );
+    const budgetScopeResource   = budgetsResource.addResource('{scopeId}');
+    const budgetHistoryResource = budgetScopeResource.addResource('history');
+    budgetHistoryResource.addMethod(
+      'GET',
+      new apigateway.LambdaIntegration(budgetsHandler, { proxy: true }),
+      authOptions,
+    );
+    const budgetPeriodResource  = budgetScopeResource.addResource('{period}');
+    budgetPeriodResource.addMethod(
+      'PUT',
+      new apigateway.LambdaIntegration(budgetsHandler, { proxy: true }),
+      authOptions,
+    );
+
+    // /forecasts — CE-backed forecasts per scope/period (Phase 1)
+    //   GET  /forecasts?scopeId=&period=          list cached
+    //   POST /forecasts/{scopeId}/{period}        refresh (admin)
+    const forecastsResource     = api.root.addResource('forecasts');
+    forecastsResource.addMethod(
+      'GET',
+      new apigateway.LambdaIntegration(forecastsHandler, { proxy: true }),
+      authOptions,
+    );
+    const forecastScope         = forecastsResource.addResource('{scopeId}');
+    const forecastPeriod        = forecastScope.addResource('{period}');
+    forecastPeriod.addMethod(
+      'POST',
+      new apigateway.LambdaIntegration(forecastsHandler, { proxy: true }),
       authOptions,
     );
 

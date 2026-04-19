@@ -39,9 +39,11 @@ import json
 import time
 import logging
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any
 
 import boto3
+
+from common.orgs import list_accounts_and_ous
 
 logger = logging.getLogger()
 logger.setLevel(os.environ.get('LOG_LEVEL', 'INFO'))
@@ -50,11 +52,9 @@ ATHENA_WORKGROUP        = os.environ.get('ATHENA_WORKGROUP',  'kostops-workgroup
 GLUE_DATABASE           = os.environ.get('GLUE_DATABASE',     'kostops_cur')
 CUR_TABLE               = os.environ.get('CUR_TABLE',         'data')
 AWS_REGION              = os.environ.get('AWS_REGION',        'us-east-1')
-PAYER_ROLE_ARN          = os.environ.get('PAYER_CROSS_ACCOUNT_ROLE', '')
 FILTER_CACHE_TTL        = int(os.environ.get('FILTER_CACHE_TTL_SECONDS', '300'))
 
-_athena      = boto3.client('athena', region_name=AWS_REGION)
-_sts         = boto3.client('sts',    region_name=AWS_REGION)
+_athena = boto3.client('athena', region_name=AWS_REGION)
 
 _filter_cache: dict[str, Any] = {'value': None, 'expiresAt': 0.0}
 
@@ -72,94 +72,13 @@ def _cors(status: int, body) -> dict:
     }
 
 
-def _payer_session() -> Optional[boto3.Session]:
-    if not PAYER_ROLE_ARN:
-        return None
-    creds = _sts.assume_role(
-        RoleArn=PAYER_ROLE_ARN,
-        RoleSessionName='kostops-visibility',
-    )['Credentials']
-    return boto3.Session(
-        aws_access_key_id     = creds['AccessKeyId'],
-        aws_secret_access_key = creds['SecretAccessKey'],
-        aws_session_token     = creds['SessionToken'],
-        region_name           = AWS_REGION,
-    )
-
-
-def _list_organizations() -> dict:
-    """Return {accounts: [...], ous: [...]} via the payer role; pagination aware."""
-    session = _payer_session()
-    if not session:
-        return {'accounts': [], 'ous': []}
-
-    orgs = session.client('organizations')
-
-    # Walk OU tree starting from the org root to build id → name + parent lookup.
-    ou_by_id: dict[str, dict] = {}
-    try:
-        roots = orgs.list_roots()['Roots']
-        for root in roots:
-            stack = [root['Id']]
-            while stack:
-                parent_id = stack.pop()
-                paginator = orgs.get_paginator('list_organizational_units_for_parent')
-                for page in paginator.paginate(ParentId=parent_id):
-                    for ou in page.get('OrganizationalUnits', []):
-                        ou_by_id[ou['Id']] = {'id': ou['Id'], 'name': ou['Name'], 'parentId': parent_id}
-                        stack.append(ou['Id'])
-    except Exception as e:
-        logger.warning(f'OU walk failed (non-fatal): {e}')
-
-    # Accounts: the ListAccounts API returns all accounts under the org regardless
-    # of OU; map each to its parent OU using list_parents (cheap; one call per account).
-    accounts: list[dict] = []
-    try:
-        paginator = orgs.get_paginator('list_accounts')
-        for page in paginator.paginate():
-            for acct in page.get('Accounts', []):
-                if acct.get('Status') != 'ACTIVE':
-                    continue
-                acct_id = acct['Id']
-                ou_id   = ''
-                ou_name = ''
-                try:
-                    parents = orgs.list_parents(ChildId=acct_id).get('Parents', [])
-                    if parents:
-                        p = parents[0]
-                        if p.get('Type') == 'ORGANIZATIONAL_UNIT':
-                            ou_id   = p['Id']
-                            ou_name = ou_by_id.get(ou_id, {}).get('name', '')
-                        elif p.get('Type') == 'ROOT':
-                            ou_id   = p['Id']
-                            ou_name = 'Root'
-                except Exception as e:
-                    logger.debug(f'list_parents({acct_id}) failed: {e}')
-                accounts.append({
-                    'id':      acct_id,
-                    'name':    acct.get('Name', acct_id),
-                    'email':   acct.get('Email', ''),
-                    'ouId':    ou_id,
-                    'ouName':  ou_name,
-                })
-    except Exception as e:
-        logger.warning(f'ListAccounts failed (non-fatal): {e}')
-
-    accounts.sort(key=lambda a: a['name'].lower())
-    ous = sorted(ou_by_id.values(), key=lambda o: o['name'].lower())
-    return {'accounts': accounts, 'ous': ous}
-
-
 def _cached_filter_options() -> dict:
     now = time.time()
     if _filter_cache['value'] and _filter_cache['expiresAt'] > now:
         return _filter_cache['value']
 
-    org_data = _list_organizations()
-
-    # Generate period list from CUR billing_period partitions if available, else
-    # fall back to last 13 months derived from today.
-    periods = _list_periods() or _last_n_months(13)
+    org_data = list_accounts_and_ous()
+    periods  = _list_periods() or _last_n_months(13)
 
     value = {
         'accounts': org_data['accounts'],
