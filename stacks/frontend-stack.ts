@@ -132,6 +132,11 @@ export class FrontendStack extends cdk.Stack {
       distribution,
       distributionPaths: ['/*'],
       memoryLimit:       256,
+      // Don't prune the bucket on each deploy — runtime-config.json is written
+      // by a separate AwsCustomResource (RuntimeConfigDeployment) and would be
+      // wiped by the pruning step. Vite emits hash-named assets so stale files
+      // accumulating is not a correctness issue; CloudFront caches on hash.
+      prune: false,
     });
 
     // ── Write runtime-config.json ─────────────────────────────────────────────
