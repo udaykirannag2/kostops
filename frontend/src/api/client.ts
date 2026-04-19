@@ -191,6 +191,136 @@ export function getMonthlySpend(): Promise<MonthlySpendResponse> {
   return apiFetch<MonthlySpendResponse>('/dashboard/monthly-spend');
 }
 
+// ── Scopes & Budgets (Budget Agent) ───────────────────────────────────────────
+
+export type ScopeType = 'ACCOUNT' | 'OU' | 'TEAM' | 'CUSTOM';
+export type ScopeStatus = 'active' | 'archived';
+
+export interface Scope {
+  scopeId:             string;
+  name:                string;
+  scopeType:           ScopeType;
+  ouIds:               string[];
+  includeAccountIds:   string[];
+  excludeAccountIds:   string[];
+  parentScopeId?:      string | null;
+  ownerSub?:           string;
+  status:              ScopeStatus;
+  createdAt?:          string;
+  updatedAt?:          string;
+  effectiveAccountIds?: string[];
+}
+
+export interface ScopesResponse { scopes: Scope[]; count: number }
+
+export function listScopes(status: ScopeStatus = 'active'): Promise<ScopesResponse> {
+  return apiFetch<ScopesResponse>(`/scopes?status=${status}`);
+}
+
+export function getScope(scopeId: string, includeEffective = false): Promise<Scope> {
+  const q = includeEffective ? '?include=effective' : '';
+  return apiFetch<Scope>(`/scopes/${encodeURIComponent(scopeId)}${q}`);
+}
+
+export interface EffectiveAccounts { scopeId: string; accountIds: string[]; count: number }
+export function getScopeEffectiveAccounts(scopeId: string): Promise<EffectiveAccounts> {
+  return apiFetch<EffectiveAccounts>(`/scopes/${encodeURIComponent(scopeId)}/effective-accounts`);
+}
+
+export interface ScopeInput {
+  name:               string;
+  scopeType:          ScopeType;
+  ouIds?:             string[];
+  includeAccountIds?: string[];
+  excludeAccountIds?: string[];
+  parentScopeId?:     string;
+}
+
+export function createScope(input: ScopeInput): Promise<Scope> {
+  return apiFetch<Scope>('/scopes', {
+    method: 'POST',
+    body:   JSON.stringify(input),
+  });
+}
+
+export function updateScope(scopeId: string, patch: Partial<ScopeInput>): Promise<Scope> {
+  return apiFetch<Scope>(`/scopes/${encodeURIComponent(scopeId)}`, {
+    method: 'PUT',
+    body:   JSON.stringify(patch),
+  });
+}
+
+export function archiveScope(scopeId: string): Promise<{ scopeId: string; status: string }> {
+  return apiFetch(`/scopes/${encodeURIComponent(scopeId)}`, { method: 'DELETE' });
+}
+
+// ── Budgets ────────────────────────────────────────────────────────────
+
+export type BudgetGranularity = 'MONTHLY' | 'QUARTERLY';
+
+export interface BudgetVersion {
+  scopeId:     string;
+  period:      string;
+  version:     number;
+  amountUsd:   number;
+  granularity: BudgetGranularity;
+  currency:    string;
+  createdBy:   string;
+  createdAt:   string;
+  note?:       string;
+  isCurrent:   boolean;
+}
+
+export function getCurrentBudget(scopeId: string, period: string): Promise<BudgetVersion | null> {
+  return apiFetch<BudgetVersion>(`/budgets?scopeId=${encodeURIComponent(scopeId)}&period=${encodeURIComponent(period)}`)
+    .catch((err) => {
+      if (err instanceof Error && err.message.includes('404')) return null;
+      throw err;
+    });
+}
+
+export interface BudgetHistoryResponse {
+  scopeId:  string;
+  versions: BudgetVersion[];
+}
+export function getBudgetHistory(scopeId: string): Promise<BudgetHistoryResponse> {
+  return apiFetch<BudgetHistoryResponse>(`/budgets/${encodeURIComponent(scopeId)}/history`);
+}
+
+export interface SetBudgetInput {
+  amountUsd:    number;
+  granularity?: BudgetGranularity;
+  note?:        string;
+}
+export function setBudget(scopeId: string, period: string, input: SetBudgetInput): Promise<BudgetVersion> {
+  return apiFetch<BudgetVersion>(
+    `/budgets/${encodeURIComponent(scopeId)}/${encodeURIComponent(period)}`,
+    { method: 'PUT', body: JSON.stringify(input) },
+  );
+}
+
+// ── Forecasts & scope actuals ─────────────────────────────────────────
+
+export interface ForecastRecord {
+  scopeId:      string;
+  period:       string;
+  sourceMethod: 'CE_FORECAST' | 'LINEAR' | 'PRIOR_PERIOD' | 'MANUAL';
+  amountUsd:    number;
+  generatedAt:  string;
+  inputs:       Record<string, unknown>;
+}
+
+export function listForecasts(scopeId: string, period: string): Promise<{ forecasts: ForecastRecord[] }> {
+  return apiFetch(`/forecasts?scopeId=${encodeURIComponent(scopeId)}&period=${encodeURIComponent(period)}`);
+}
+
+export function refreshForecast(scopeId: string, period: string): Promise<ForecastRecord> {
+  return apiFetch<ForecastRecord>(
+    `/forecasts/${encodeURIComponent(scopeId)}/${encodeURIComponent(period)}`,
+    { method: 'POST' },
+  );
+}
+
 // ── Visibility (native dashboards) ────────────────────────────────────────────
 
 export type DashboardType =

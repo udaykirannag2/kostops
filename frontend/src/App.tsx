@@ -8,6 +8,9 @@ import PlaceholderFromNav from './pages/PlaceholderFromNav';
 import MembersPage from './pages/settings/MembersPage';
 import { AdminRoute } from './auth/AdminRoute';
 import { NativeDashboard } from './components/visibility/NativeDashboard';
+import ScopesPage          from './pages/budget/ScopesPage';
+import BudgetsPage         from './pages/budget/BudgetsPage';
+import BudgetDashboardPage from './pages/budget/BudgetDashboardPage';
 
 interface AppProps {
   signOut?: () => void;
@@ -28,6 +31,9 @@ export default function App({ signOut, user }: AppProps) {
           <Route path="/visibility/compute"         element={<NativeDashboard type="compute" />} />
           <Route path="/visibility/storage"         element={<NativeDashboard type="storage" />} />
           <Route path="/visibility/ai-ml"           element={<NativeDashboard type="ai-ml" />} />
+          <Route path="/visibility/scopes"          element={<ScopesPage />} />
+          <Route path="/visibility/budgets"         element={<BudgetsPage />} />
+          <Route path="/visibility/budget-dashboard" element={<BudgetDashboardPage />} />
 
           {/* Optimization */}
           <Route path="/optimization/opportunities"         element={<Findings />} />

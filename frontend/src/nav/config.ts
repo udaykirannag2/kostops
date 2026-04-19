@@ -56,6 +56,21 @@ export const NAV_SECTIONS: NavSection[] = [
         path:        '/visibility/ai-ml',
         description: 'SageMaker, Bedrock, Rekognition, Comprehend, and other AI service costs.',
       },
+      {
+        label:       'Teams & Scopes',
+        path:        '/visibility/scopes',
+        description: 'Define teams, OUs, and custom account groups that budgets roll up to.',
+      },
+      {
+        label:       'Budgets',
+        path:        '/visibility/budgets',
+        description: 'Set and version per-scope monthly budgets — inline edits create new versions.',
+      },
+      {
+        label:       'Budget Dashboard',
+        path:        '/visibility/budget-dashboard',
+        description: 'Budget vs forecast by scope for the current period.',
+      },
     ],
   },
   {
