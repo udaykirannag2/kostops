@@ -201,9 +201,10 @@ export class AgentStack extends cdk.Stack {
           '  rm -rf /asset-output/$pkg /asset-output/${pkg//-/_}',
           '  rm -rf /asset-output/${pkg}*.dist-info /asset-output/${pkg//-/_}*.dist-info',
           'done',
-          // Copy KostOps source files (strands/ overrides pip-installed real package)
-          '&& cp visibility_agent.py payer_role.py /asset-output/',
-          '&& cp -r tools mcp strands /asset-output/',
+          // Copy KostOps source files (strands/ overrides pip-installed real package;
+          // agents/ is the supervisor + specialist package; agent_entrypoint.py is the new entrypoint).
+          '&& cp agent_entrypoint.py visibility_agent.py payer_role.py /asset-output/',
+          '&& cp -r agents tools mcp strands /asset-output/',
         ].join(' ')],
         // Mount the repo root so source files are accessible inside Docker
         volumes: [{
@@ -472,7 +473,11 @@ class AgentCodeBundler implements cdk.ILocalBundling {
       }
 
       // ── Copy KostOps agent source files ────────────────────────────────────
-      const FILES = ['visibility_agent.py', 'payer_role.py'];
+      // agent_entrypoint.py is the new AgentCore entry point; it imports
+      // agents.supervisor which dispatches to agents.<specialist>. The legacy
+      // visibility_agent.py is copied for the single-file fallback during any
+      // roll-forward, but the entryPoint in agentcore_deploy.py is agent_entrypoint.py.
+      const FILES = ['agent_entrypoint.py', 'visibility_agent.py', 'payer_role.py'];
       for (const f of FILES) {
         const src = pt.join(repoRoot, f);
         if (fse.existsSync(src)) {
@@ -483,7 +488,8 @@ class AgentCodeBundler implements cdk.ILocalBundling {
       // Copy local dirs — 'strands' MUST come after pip install to override the
       // real strands-agents package with the lightweight stub that avoids
       // pydantic_core / telemetry / Bedrock model imports on cold start.
-      const DIRS = ['tools', 'mcp', 'strands'];
+      // 'agents' is the supervisor + specialist package.
+      const DIRS = ['agents', 'tools', 'mcp', 'strands'];
       for (const d of DIRS) {
         const src = pt.join(repoRoot, d);
         if (fse.existsSync(src)) {

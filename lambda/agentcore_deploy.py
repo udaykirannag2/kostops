@@ -98,7 +98,11 @@ def _handle_create_or_update(props: dict) -> dict:
                 }
             },
             'runtime':    'PYTHON_3_12',
-            'entryPoint': ['visibility_agent.py'],
+            # New supervisor entrypoint; delegates to agents.supervisor.dispatch
+            # which today routes every turn to the Visibility specialist (no
+            # behavioural change for end users) but will fan out to Budget /
+            # Optimization / Analytics specialists in Phase 1+.
+            'entryPoint': ['agent_entrypoint.py'],
         }
     }
     network   = {'networkMode': 'PUBLIC'}

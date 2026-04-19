@@ -70,6 +70,38 @@ def _get_user_id(event: dict) -> str:
     )
 
 
+def _get_claims(event: dict) -> dict:
+    """Return the full Cognito JWT claims dict (already validated by API Gateway)."""
+    return (
+        event.get('requestContext', {})
+             .get('authorizer', {})
+             .get('claims', {})
+             or {}
+    )
+
+
+def _parse_groups(claims: dict) -> list:
+    """Normalise cognito:groups into a list regardless of serialisation."""
+    raw = claims.get('cognito:groups') or ''
+    if isinstance(raw, list):
+        return [str(g).strip() for g in raw if str(g).strip()]
+    if isinstance(raw, str):
+        cleaned = raw.strip('[]')
+        return [g.strip() for g in cleaned.replace(',', ' ').split() if g.strip()]
+    return []
+
+
+def _get_bearer(event: dict) -> str:
+    """Return the raw Bearer token (ID token) so write tools can pass it to the API."""
+    headers = event.get('headers') or {}
+    # API Gateway may lowercase or preserve the header name; check both.
+    for key in ('Authorization', 'authorization'):
+        value = headers.get(key)
+        if value and value.lower().startswith('bearer '):
+            return value.split(None, 1)[1].strip()
+    return ''
+
+
 def _save_conversation(user_id: str, session_id: str,
                        user_message: str, assistant_reply: str) -> None:
     """
@@ -129,6 +161,7 @@ def handler(event: dict, context) -> dict:
         body       = json.loads(event.get('body') or '{}')
         message    = body.get('message', '').strip()
         session_id = body.get('sessionId') or str(uuid.uuid4())
+        page       = body.get('page') or {}
     except (json.JSONDecodeError, KeyError) as e:
         return _cors_response(400, {'error': f'Invalid request body: {e}'})
 
@@ -141,14 +174,34 @@ def handler(event: dict, context) -> dict:
             'hint':  'Run: python scripts/deploy_agent.py',
         })
 
-    user_id = _get_user_id(event)
-    logger.info(f"Chat request | user={user_id[:8]}... | session={session_id} | message_len={len(message)}")
+    claims  = _get_claims(event)
+    groups  = _parse_groups(claims)
+    user_id = claims.get('sub', 'anonymous')
+    token   = _get_bearer(event)
+    logger.info(
+        f"Chat request | user={user_id[:8]}... | session={session_id} "
+        f"| groups={groups} | message_len={len(message)}"
+    )
+
+    # Forward caller identity + optional page context to the supervisor so it
+    # can enforce role-gates and so specialist write tools can call the
+    # KostOps API with the caller's JWT (pass-through, no elevation).
+    agent_payload = {
+        'inputText': message,
+        'sub':       user_id,
+        'groups':    groups,
+        'claims':    {k: v for k, v in claims.items() if k in (
+            'sub', 'email', 'cognito:username', 'cognito:groups',
+        )},
+        'token':     token,
+        'page':      page,
+    }
 
     try:
         resp = _agentcore.invoke_agent_runtime(
             agentRuntimeArn=  AGENT_RUNTIME_ARN,
             runtimeSessionId= session_id,
-            payload=          json.dumps({'inputText': message}).encode('utf-8'),
+            payload=          json.dumps(agent_payload).encode('utf-8'),
             contentType=      'application/json',
             accept=           'application/json',
         )
