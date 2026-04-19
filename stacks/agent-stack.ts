@@ -213,10 +213,17 @@ export class AgentStack extends cdk.Stack {
         }],
         workingDirectory: '/asset-input',
       },
-      // Exclude large directories that should never be in the agent zip
+      // Exclude large directories that should never be in the agent zip.
+      // Critically: `lambda/` must be excluded — the agent bundler copies only
+      // the files it needs from repo root (agent_entrypoint.py, visibility_agent.py,
+      // payer_role.py) plus the agents/, tools/, mcp/, strands/ directories.
+      // Including `lambda/` would cause every API handler change to bump the
+      // agent asset hash, triggering an unnecessary AgentCore runtime replace
+      // and breaking ApiStack's Fn::ImportValue on agentRuntimeArn.
       exclude: [
         'node_modules', 'frontend', 'cdk.out', '.git',
-        'install-logs', 'scripts', 'stacks', '*.ts', '*.js',
+        'install-logs', 'scripts', 'stacks', 'lambda', 'website',
+        '*.ts', '*.js',
         '__pycache__', '*.pyc', '.env',
       ],
     });
@@ -302,9 +309,14 @@ export class AgentStack extends cdk.Stack {
           ),
           command: ['bash', '-c', [
             'pip install --target /asset-output --quiet boto3',
-            '&& cp /asset-input/*.py /asset-output/',
+            '&& cp /asset-input/agentcore_deploy.py /asset-output/',
           ].join(' ')],
         },
+        // The source asset path contains every Lambda handler. Exclude everything
+        // that isn't agentcore_deploy.py so sibling handlers never bump this
+        // Lambda's asset hash (which would cascade into an unnecessary AgentCore
+        // runtime replacement on unrelated deploys).
+        exclude: ['*', '!agentcore_deploy.py'],
       }),
       role:          deployRole,
       timeout:       cdk.Duration.minutes(15),  // wait_for_active polls up to 12 min
@@ -509,6 +521,10 @@ class AgentCodeBundler implements cdk.ILocalBundling {
 }
 
 // ── Deploy Lambda bundler — pip-installs a newer boto3 so codeConfiguration works ──
+// Only copies agentcore_deploy.py — copying every .py file in lambda/ would
+// bump this Lambda's asset hash every time a new API handler is added, which
+// cascades into forcing AgentCoreRuntime replacement and breaks ApiStack's
+// Fn::ImportValue on the exported agentRuntimeArn.
 class DeployLambdaBundler implements cdk.ILocalBundling {
   tryBundle(outputDir: string): boolean {
     const { spawnSync } = require('child_process');
@@ -527,11 +543,12 @@ class DeployLambdaBundler implements cdk.ILocalBundling {
         return false;
       }
 
-      for (const f of fse.readdirSync(lambdaDir)) {
-        if (f.endsWith('.py')) {
-          fse.copyFileSync(pt.join(lambdaDir, f), pt.join(outputDir, f));
-        }
+      const src = pt.join(lambdaDir, 'agentcore_deploy.py');
+      if (!fse.existsSync(src)) {
+        console.error('[KostOps] agentcore_deploy.py missing at', src);
+        return false;
       }
+      fse.copyFileSync(src, pt.join(outputDir, 'agentcore_deploy.py'));
       return true;
     } catch (err) {
       console.error('[KostOps] deploy Lambda bundling failed:', err);
