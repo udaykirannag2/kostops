@@ -124,7 +124,7 @@ export class ApiStack extends cdk.Stack {
     // introduced that also targets lambdaRole.
     const membersRole = new iam.Role(this, 'MembersLambdaRole', {
       assumedBy:   new iam.ServicePrincipal('lambda.amazonaws.com'),
-      description: 'Execution role for members_handler — Cognito group mgmt + audit writes',
+      description: 'Execution role for members_handler - Cognito group mgmt + audit writes',
       managedPolicies: [
         iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaBasicExecutionRole'),
       ],
