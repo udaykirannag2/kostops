@@ -16,7 +16,8 @@
  */
 
 import { useEffect, useState } from 'react';
-import { fetchAuthSession, Hub } from 'aws-amplify/auth';
+import { fetchAuthSession } from 'aws-amplify/auth';
+import { Hub } from 'aws-amplify/utils';
 
 export type Role = 'admin' | 'viewer';
 
@@ -80,8 +81,9 @@ export function useRole(): RoleState {
     }
 
     load();
-    const unsub = Hub.listen('auth', ({ payload }) => {
-      if (payload.event === 'signedIn' || payload.event === 'tokenRefresh') {
+    const unsub = Hub.listen('auth', (data: { payload: { event: string } }) => {
+      const ev = data.payload.event;
+      if (ev === 'signedIn' || ev === 'tokenRefresh') {
         load();
       }
     });
