@@ -13,6 +13,7 @@ interface ApiStackProps extends cdk.StackProps {
   findingsTable:           ddb.Table;
   integrationsTable:       ddb.Table;
   conversationsTable:      ddb.Table;
+  auditEventsTable:        ddb.Table;
   agentEndpointUrl:        string;
   userPool:                cognito.UserPool;
   slackWebhookUrl:         string;
@@ -59,6 +60,8 @@ export class ApiStack extends cdk.Stack {
     props.findingsTable.grantReadWriteData(lambdaRole);
     props.integrationsTable.grantReadWriteData(lambdaRole);
     props.conversationsTable.grantReadWriteData(lambdaRole);
+    // Every mutation handler appends to the audit log — shared role needs write access
+    props.auditEventsTable.grantReadWriteData(lambdaRole);
 
     // SSM access for integrations-handler and slack-handler (read/write secrets)
     lambdaRole.addToPolicy(new iam.PolicyStatement({
@@ -100,6 +103,8 @@ export class ApiStack extends cdk.Stack {
       FINDINGS_TABLE:          props.findingsTable.tableName,
       INTEGRATIONS_TABLE:      props.integrationsTable.tableName,
       CONVERSATIONS_TABLE:     props.conversationsTable.tableName,
+      AUDIT_TABLE:             props.auditEventsTable.tableName,
+      USER_POOL_ID:            props.userPool.userPoolId,
       AGENT_ENDPOINT_URL:      props.agentEndpointUrl,
       AGENT_RUNTIME_ARN:       props.agentRuntimeArn,
       SLACK_WEBHOOK_URL:       props.slackWebhookUrl,   // fallback; prefer SSM
@@ -110,6 +115,22 @@ export class ApiStack extends cdk.Stack {
       POWERTOOLS_SERVICE_NAME: 'kostops-api',
       LOG_LEVEL:               'INFO',
     };
+
+    // Cognito group management for the Members page (admin only at handler layer)
+    lambdaRole.addToPolicy(new iam.PolicyStatement({
+      sid:     'CognitoMembersAdmin',
+      actions: [
+        'cognito-idp:AdminCreateUser',
+        'cognito-idp:AdminDeleteUser',
+        'cognito-idp:AdminDisableUser',
+        'cognito-idp:AdminEnableUser',
+        'cognito-idp:AdminAddUserToGroup',
+        'cognito-idp:AdminRemoveUserFromGroup',
+        'cognito-idp:AdminListGroupsForUser',
+        'cognito-idp:ListUsers',
+      ],
+      resources: [props.userPool.userPoolArn],
+    }));
 
     // ── Lambda: chat-handler ──────────────────────────────────────────────────
     const chatHandler = new lambda.Function(this, 'ChatHandler', {
@@ -196,6 +217,20 @@ export class ApiStack extends cdk.Stack {
       actions:   ['lambda:InvokeFunction'],
       resources: [slackCommandHandler.functionArn],
     }));
+
+    // ── Lambda: members-handler ───────────────────────────────────────────────
+    // Admin-only Cognito group management for the Members page.
+    const membersHandler = new lambda.Function(this, 'MembersHandler', {
+      functionName:  'kostops-members-handler',
+      runtime:       lambda.Runtime.PYTHON_3_12,
+      handler:       'members_handler.handler',
+      code:          lambda.Code.fromAsset('lambda'),
+      role:          lambdaRole,
+      timeout:       cdk.Duration.seconds(30),
+      memorySize:    128,
+      environment:   commonEnv,
+      logRetention:  logs.RetentionDays.TWO_WEEKS,
+    });
 
     // ── Lambda: dashboard-handler ─────────────────────────────────────────────
     const dashboardHandler = new lambda.Function(this, 'DashboardHandler', {
@@ -371,6 +406,34 @@ export class ApiStack extends cdk.Stack {
     monthlySpendResource.addMethod(
       'GET',
       new apigateway.LambdaIntegration(dashboardHandler, { proxy: true }),
+      authOptions,
+    );
+
+    // /members — admin-only (enforced inside members_handler via require_admin)
+    //   GET    /members         → list members with role
+    //   POST   /members         → invite new member
+    //   PUT    /members/{sub}   → change role
+    //   DELETE /members/{sub}   → disable user
+    const membersResource = api.root.addResource('members');
+    membersResource.addMethod(
+      'GET',
+      new apigateway.LambdaIntegration(membersHandler, { proxy: true }),
+      authOptions,
+    );
+    membersResource.addMethod(
+      'POST',
+      new apigateway.LambdaIntegration(membersHandler, { proxy: true }),
+      authOptions,
+    );
+    const memberResource = membersResource.addResource('{sub}');
+    memberResource.addMethod(
+      'PUT',
+      new apigateway.LambdaIntegration(membersHandler, { proxy: true }),
+      authOptions,
+    );
+    memberResource.addMethod(
+      'DELETE',
+      new apigateway.LambdaIntegration(membersHandler, { proxy: true }),
       authOptions,
     );
 

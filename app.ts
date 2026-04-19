@@ -74,6 +74,7 @@ const apiStack = new ApiStack(app, 'KostOpsApiStack', {
   findingsTable:           dataStack.findingsTable,
   integrationsTable:       dataStack.integrationsTable,
   conversationsTable:      dataStack.conversationsTable,
+  auditEventsTable:        dataStack.auditEventsTable,
   agentEndpointUrl:        agentStack.agentEndpointUrl,
   agentRuntimeArn:         agentStack.agentRuntimeArn,
   userPool:                authStack.userPool,

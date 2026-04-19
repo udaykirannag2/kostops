@@ -6,6 +6,8 @@ import Chat from './components/Chat';
 import Findings from './components/Findings';
 import Integrations from './components/Integrations';
 import PlaceholderFromNav from './pages/PlaceholderFromNav';
+import MembersPage from './pages/settings/MembersPage';
+import { AdminRoute } from './auth/AdminRoute';
 
 interface AppProps {
   signOut?: () => void;
@@ -47,7 +49,10 @@ export default function App({ signOut, user }: AppProps) {
 
           {/* Admin */}
           <Route path="/admin/workspace"   element={<PlaceholderFromNav />} />
-          <Route path="/admin/users-roles" element={<PlaceholderFromNav />} />
+          <Route
+            path="/admin/users-roles"
+            element={<AdminRoute><MembersPage /></AdminRoute>}
+          />
           <Route path="/admin/policies"    element={<PlaceholderFromNav />} />
           <Route path="/admin/settings"    element={<PlaceholderFromNav />} />
         </Route>

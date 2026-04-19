@@ -18,6 +18,8 @@ export interface NavPage {
   path: string;
   /** Shown under the page title in the main header */
   description?: string;
+  /** Hide this entry from viewers; admin-only pages and buttons. */
+  adminOnly?: boolean;
 }
 
 export interface NavSection {
@@ -151,6 +153,7 @@ export const NAV_SECTIONS: NavSection[] = [
         label:       'Users & Roles',
         path:        '/admin/users-roles',
         description: 'Who can view costs, approve changes, and manage integrations.',
+        adminOnly:   true,
       },
       {
         label:       'Policies',

@@ -28,6 +28,8 @@ QuickSight-powered cost visibility: invoice spend by account, blended costs, and
 - Optimization — ranked savings opportunities (idle EC2, unattached EBS, rightsizing)
 - AI Agent — natural language chat backed by AWS Strands + Claude on Bedrock
 - Slack alerts — daily digest and anomaly notifications
+- RBAC — `admin` (read + write) vs `viewer` (read-only) via Cognito groups; every mutation is audit-logged. See ARCHITECTURE.md §8.
+- Members page — admins invite teammates and manage roles at `/admin/users-roles`. The first invited user (`adminEmail` context value at deploy time) is bootstrapped into the `admin` group automatically.
 
 ## Architecture
 

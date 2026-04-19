@@ -15,9 +15,11 @@ For **deployment instructions** see `README.md`. For the **product roadmap** see
 5. [Data Pipeline — CUR to QuickSight](#5-data-pipeline--cur-to-quicksight)
 6. [Agent Architecture — strands-agents + AgentCore](#6-agent-architecture--strands-agents--agentcore)
 7. [Authentication & Security Model](#7-authentication--security-model)
-8. [Slack Integration Architecture](#8-slack-integration-architecture)
-9. [Frontend Architecture](#9-frontend-architecture)
-10. [Architecture Decision Records](#10-architecture-decision-records)
+8. [RBAC & Audit Logging](#8-rbac--audit-logging)
+9. [Slack Integration Architecture](#9-slack-integration-architecture)
+10. [Frontend Architecture](#10-frontend-architecture)
+11. [Roadmap — Supervisor + Specialist Agents](#11-roadmap--supervisor--specialist-agents)
+12. [Architecture Decision Records](#12-architecture-decision-records)
 
 ---
 
@@ -485,7 +487,49 @@ The signing secret is stored in SSM SecureString `/kostops/integrations/slack-si
 
 ---
 
-## 8. Slack Integration Architecture
+## 8. RBAC & Audit Logging
+
+KostOps enforces a two-tier role model across the whole product:
+
+- **admin** — full read + write. Can manage members, change finding status, configure integrations, and (as the product grows) author budgets, allocation rules, dashboards, and runbooks.
+- **viewer** — read-only. Can query spend, inspect findings, and read dashboards, but every mutation is refused.
+
+### Enforcement layers
+
+Every mutation must pass **all three** checks — hiding a button is not protection, and the API re-validates on every call.
+
+1. **UI** — `frontend/src/auth/useRole.ts` reads `cognito:groups` from the ID-token payload. `SidebarNav` hides `adminOnly` pages for viewers; `AdminRoute` wraps admin-only page routes and renders a friendly "admin required" panel for viewers.
+2. **API** — `lambda/common/roles.py::require_admin(event)` sits at the top of every write handler and returns `403` when the caller is not in the `admin` group. Writes retrofitted today: `findings_handler.update_status`, `integrations_handler` (PUT/DELETE + test), plus the new `members_handler` (all routes).
+3. **Agent / supervisor** — once the supervisor is live, write specialists refuse to run without `admin` in claims. Write tools call the KostOps API with the caller's JWT so the API re-validates role and produces a `source=CHAT` audit row.
+
+### Role bootstrap
+
+`stacks/auth-stack.ts` creates two Cognito groups — `admin` and `viewer` — as stable, RETAINed resources. The first invited user (the `adminEmail` context value) is added to `admin` by a `CfnUserPoolUserToGroupAttachment`. All subsequent members default to `viewer` until an admin promotes them through the Members page (`/admin/users-roles`).
+
+### Audit trail
+
+Every mutation writes one row to the `kostops-audit-events` DynamoDB table via `lambda/common/audit.py::write_audit`:
+
+| Column | Value |
+|---|---|
+| `pk`         | `<EntityType>#<entityId>` — e.g. `Finding#f-abc123`, `Member#<cognito-sub>` |
+| `sk`         | `<ISO-ts>#<eventId>` — natural time ordering per entity |
+| `actorSub`   | Cognito sub of the user that made the change |
+| `actorEmail` | Convenience for the UI |
+| `action`     | `CREATE`, `UPDATE`, `DELETE`, `STATUS_CHANGE`, `ROLE_CHANGE`, `DISABLE`, … |
+| `before`     | Entity snapshot prior to the change (null on CREATE) |
+| `after`      | Entity snapshot after the change (null on DELETE) |
+| `source`     | `UI`, `CHAT`, `CSV`, `API`, `CRON`, `SELF_HEAL` |
+
+The table has a `byActor` GSI so "what did user X change?" is a single query. Audit writes are non-blocking by default (log-and-continue on failure); high-risk paths can pass `fail_closed=True` to refuse the mutation if the audit write fails.
+
+### Members page
+
+The `/admin/users-roles` page (admin-only) renders the member list, the current role, and enable/disable controls. It is powered by `lambda/members_handler.py` which calls `cognito-idp:AdminListGroupsForUser` per user and mutates via `AdminAddUserToGroup` / `AdminRemoveUserFromGroup` / `AdminDisableUser`. Role changes take effect on the user's next JWT refresh (within ~1h with the default Cognito token lifetime).
+
+---
+
+## 9. Slack Integration Architecture
 
 KostOps has two independent Slack integration flows.
 
@@ -561,7 +605,7 @@ slackCommandHandler.addToRolePolicy(new iam.PolicyStatement({
 
 ---
 
-## 9. Frontend Architecture
+## 10. Frontend Architecture
 
 ### Runtime Config Pattern
 
@@ -624,7 +668,23 @@ Typed wrapper around `fetch` that:
 
 ---
 
-## 10. Architecture Decision Records
+## 11. Roadmap — Supervisor + Specialist Agents
+
+KostOps today runs a single **Visibility Agent** on Bedrock AgentCore Runtime. The next phases of the product add a supervisor that dispatches to specialists under one runtime for MVP and can split into separate runtimes later without changes inside specialists.
+
+| Agent | Charter | Status |
+|---|---|---|
+| **Visibility**  | Read-only spend / forecast / findings Q&A. | Deployed today as `visibility_agent.py`. Will move to `agents/visibility.py`. |
+| **Budget**      | Scope CRUD, budget versions, forecasts, CSV import/export, allocation rules, variance. | Phase 1–3. |
+| **Optimization** | Rightsizing, SP/RI, anomalies, waste. Promoted from experimental `optimization_agent_core.py`. | Phase 4. |
+| **Analytics**   | Report + dashboard definitions, schedules, alerts, chat-authored dashboards ("save this conversation as a weekly dashboard"). | Phase 5. |
+| **Reliability** | Self-healing: signature-match → bounded runbook → audit → escalate. Patterns from K8s operators, AWS Systems Manager Automation, Datadog Workflows. | Phase 6. |
+
+The Supervisor will receive every chat message, classify intent via a cheap Claude Haiku call, enforce role at dispatch, and route to the specialist. Write tools always call the KostOps API with the caller's JWT so the API authorizer re-validates role and every mutation lands an audit row.
+
+---
+
+## 12. Architecture Decision Records
 
 | # | Decision | Alternatives Considered | Rationale |
 |---|---|---|---|

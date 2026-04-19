@@ -46,6 +46,9 @@ export class DataStack extends cdk.Stack {
   /** Conversations table — stores chat session history per user */
   public readonly conversationsTable: ddb.Table;
 
+  /** Audit events table — immutable mutation log (RBAC governance) */
+  public readonly auditEventsTable: ddb.Table;
+
   /** Athena results bucket name — passed to AgentStack for write permissions */
   public readonly athenaResultsBucketName: string;
 
@@ -329,6 +332,45 @@ export class DataStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.DESTROY,  // conversations are ephemeral
     });
 
+    // ── 7. DynamoDB audit events table ──────────────────────────────────────
+    // Immutable mutation log for RBAC governance. Every write across KostOps
+    // (findings status, integrations config, scans, and all future budget /
+    // analytics / reliability mutations) lands one row here via
+    // lambda/common/audit.py::write_audit.
+    //
+    // Access patterns:
+    //   - Activity feed for one entity    → PK = "Finding#f-123"
+    //   - All mutations by one actor      → GSI byActor (actorSub)
+    //
+    // Schema:
+    //   pk          (PK, String) — "<EntityType>#<entityId>"
+    //   sk          (SK, String) — "<isoTs>#<eventId>"
+    //   actorSub    (String)     — Cognito sub of the user that made the change
+    //   actorEmail  (String)     — convenience for UI
+    //   action      (String)     — CREATE | UPDATE | DELETE | STATUS_CHANGE | …
+    //   before      (Map)        — entity snapshot before mutation (null on CREATE)
+    //   after       (Map)        — entity snapshot after mutation  (null on DELETE)
+    //   source      (String)     — UI | CHAT | CSV | API | CRON | SELF_HEAL
+    //   ts          (String)     — ISO 8601
+    //   eventId     (String)     — short UUID
+    this.auditEventsTable = new ddb.Table(this, 'AuditEventsTable', {
+      tableName:    'kostops-audit-events',
+      partitionKey: { name: 'pk', type: ddb.AttributeType.STRING },
+      sortKey:      { name: 'sk', type: ddb.AttributeType.STRING },
+      billingMode:  ddb.BillingMode.PAY_PER_REQUEST,
+      encryption:   ddb.TableEncryption.AWS_MANAGED,
+      pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
+      removalPolicy: cdk.RemovalPolicy.RETAIN, // audit history must never be lost
+    });
+
+    // GSI: byActor — "what did this user change?" for the Members page drill-in
+    this.auditEventsTable.addGlobalSecondaryIndex({
+      indexName:     'byActor',
+      partitionKey:  { name: 'actorSub', type: ddb.AttributeType.STRING },
+      sortKey:       { name: 'ts',       type: ddb.AttributeType.STRING },
+      projectionType: ddb.ProjectionType.ALL,
+    });
+
     // ── Outputs ───────────────────────────────────────────────────────────────
     new cdk.CfnOutput(this, 'AthenaResultsBucketName', {
       value:       athenaResultsBucket.bucketName,
@@ -337,6 +379,10 @@ export class DataStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'FindingsTableName', {
       value:       this.findingsTable.tableName,
       description: 'DynamoDB findings table',
+    });
+    new cdk.CfnOutput(this, 'AuditEventsTableName', {
+      value:       this.auditEventsTable.tableName,
+      description: 'DynamoDB audit events table',
     });
     new cdk.CfnOutput(this, 'AthenaWorkgroup', {
       value:       'kostops-workgroup',

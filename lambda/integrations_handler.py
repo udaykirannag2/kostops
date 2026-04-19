@@ -24,6 +24,9 @@ from datetime import datetime, timezone
 import boto3
 from boto3.dynamodb.conditions import Key
 
+from common.roles import require_admin, PermissionDenied, forbidden_response
+from common.audit import write_audit
+
 logger              = logging.getLogger()
 logger.setLevel(os.environ.get('LOG_LEVEL', 'INFO'))
 
@@ -173,7 +176,7 @@ def _get_integration(name: str) -> dict:
     })
 
 
-def _put_integration(name: str, body: dict) -> dict:
+def _put_integration(event: dict, name: str, body: dict) -> dict:
     """Create or update an integration config."""
     if name not in SUPPORTED:
         return _cors(404, {'error': f'Unknown integration: {name}'})
@@ -181,6 +184,11 @@ def _put_integration(name: str, body: dict) -> dict:
     meta    = INTEGRATION_META[name]
     config  = body.get('config', {})
     secrets = body.get('secrets', {})
+
+    # Capture prior config for audit trail (secrets never logged)
+    prior_resp = _table.get_item(Key={'pk': f'INTEGRATION#{name}', 'sk': 'CONFIG'})
+    prior      = prior_resp.get('Item') or {}
+    prior_slim = {'enabled': bool(prior.get('enabled')), 'config': prior.get('config', {})}
 
     # Persist non-empty secrets to SSM (skip if value is masked/empty)
     for secret_name in meta['secrets']:
@@ -200,15 +208,29 @@ def _put_integration(name: str, body: dict) -> dict:
         'updatedAt':     now,
     })
 
+    write_audit(
+        event,
+        action='UPDATE' if prior else 'CREATE',
+        entity_type='Integration',
+        entity_id=name,
+        before=prior_slim if prior else None,
+        after={'enabled': True, 'config': config},
+        source='UI',
+    )
+
     logger.info(f'Integration {name} configured')
     return _cors(200, {'name': name, 'connected': True, 'configuredAt': now})
 
 
-def _delete_integration(name: str) -> dict:
+def _delete_integration(event: dict, name: str) -> dict:
     if name not in SUPPORTED:
         return _cors(404, {'error': f'Unknown integration: {name}'})
 
     meta = INTEGRATION_META[name]
+
+    prior_resp = _table.get_item(Key={'pk': f'INTEGRATION#{name}', 'sk': 'CONFIG'})
+    prior      = prior_resp.get('Item') or {}
+    prior_slim = {'enabled': bool(prior.get('enabled')), 'config': prior.get('config', {})}
 
     # Remove secrets from SSM
     for secret in meta['secrets']:
@@ -216,6 +238,16 @@ def _delete_integration(name: str) -> dict:
 
     # Remove from DynamoDB
     _table.delete_item(Key={'pk': f'INTEGRATION#{name}', 'sk': 'CONFIG'})
+
+    write_audit(
+        event,
+        action='DELETE',
+        entity_type='Integration',
+        entity_id=name,
+        before=prior_slim if prior else None,
+        after=None,
+        source='UI',
+    )
 
     logger.info(f'Integration {name} disconnected')
     return _cors(200, {'name': name, 'connected': False})
@@ -305,16 +337,28 @@ def handler(event: dict, context) -> dict:
     if method == 'GET' and name and not action:
         return _get_integration(name)
 
-    # PUT /integrations/{name}
+    # PUT /integrations/{name} — admin only
     if method == 'PUT' and name and not action:
-        return _put_integration(name, body)
+        try:
+            require_admin(event)
+        except PermissionDenied:
+            return forbidden_response()
+        return _put_integration(event, name, body)
 
-    # DELETE /integrations/{name}
+    # DELETE /integrations/{name} — admin only
     if method == 'DELETE' and name and not action:
-        return _delete_integration(name)
+        try:
+            require_admin(event)
+        except PermissionDenied:
+            return forbidden_response()
+        return _delete_integration(event, name)
 
-    # POST /integrations/{name}/test
+    # POST /integrations/{name}/test — admin only (sends external traffic)
     if method == 'POST' and name and action == 'test':
+        try:
+            require_admin(event)
+        except PermissionDenied:
+            return forbidden_response()
         return _test_integration(name)
 
     return _cors(405, {'error': f'Method {method} not supported on this path'})

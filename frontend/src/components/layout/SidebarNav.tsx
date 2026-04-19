@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import { ChevronDown, LogOut } from 'lucide-react';
 import clsx from 'clsx';
 import { NAV_SECTIONS, sectionIdForPath } from '../../nav/config';
+import { useRole } from '../../auth/useRole';
 
 interface SidebarNavProps {
   userEmail:   string;
@@ -23,6 +24,18 @@ export default function SidebarNav({ userEmail, signOut, onNavigate, className }
   const { pathname }   = useLocation();
   const routeSection   = sectionIdForPath(pathname);
   const [openSectionId, setOpenSectionId] = useState<string | null>(() => routeSection);
+  const { isAdmin }    = useRole();
+
+  // Viewers never see admin-only pages. Sections whose only children are
+  // admin-only are hidden as well so we don't render empty accordions.
+  const visibleSections = useMemo(() => {
+    return NAV_SECTIONS
+      .map((s) => ({
+        ...s,
+        children: s.children.filter((c) => isAdmin || !c.adminOnly),
+      }))
+      .filter((s) => s.children.length > 0);
+  }, [isAdmin]);
 
   useEffect(() => {
     if (routeSection) setOpenSectionId(routeSection);
@@ -30,7 +43,7 @@ export default function SidebarNav({ userEmail, signOut, onNavigate, className }
 
   function onSectionClick(id: string) {
     setOpenSectionId(prev => {
-      const section        = NAV_SECTIONS.find(s => s.id === id);
+      const section        = visibleSections.find(s => s.id === id);
       const hasActiveChild = section?.children.some(c => c.path === pathname) ?? false;
       // Never collapse the section that contains the current page
       if (prev === id && !hasActiveChild) return null;
@@ -58,7 +71,7 @@ export default function SidebarNav({ userEmail, signOut, onNavigate, className }
       {/* ── Primary navigation ────────────────────────────────────────── */}
       <nav className="scrollbar-dark flex-1 overflow-y-auto overflow-x-hidden px-2 py-2.5">
         <ul className="space-y-px">
-          {NAV_SECTIONS.map(section => {
+          {visibleSections.map(section => {
             const Icon           = section.icon;
             const isOpen         = openSectionId === section.id;
             const hasActiveChild = section.children.some(c => c.path === pathname);

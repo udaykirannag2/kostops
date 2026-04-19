@@ -191,6 +191,50 @@ export function getMonthlySpend(): Promise<MonthlySpendResponse> {
   return apiFetch<MonthlySpendResponse>('/dashboard/monthly-spend');
 }
 
+// ── Members (admin-only) ──────────────────────────────────────────────────────
+
+export type MemberRole = 'admin' | 'viewer';
+
+export interface Member {
+  sub:       string;
+  username:  string;
+  email:     string;
+  status:    string;    // Cognito UserStatus (e.g. CONFIRMED, FORCE_CHANGE_PASSWORD)
+  enabled:   boolean;
+  createdAt: string;
+  role:      MemberRole;
+}
+
+export interface MembersResponse {
+  members: Member[];
+  count:   number;
+}
+
+export function listMembers(): Promise<MembersResponse> {
+  return apiFetch<MembersResponse>('/members');
+}
+
+export function inviteMember(email: string, role: MemberRole): Promise<Member> {
+  return apiFetch<Member>('/members', {
+    method: 'POST',
+    body:   JSON.stringify({ email, role }),
+  });
+}
+
+export function changeMemberRole(
+  sub:  string,
+  role: MemberRole,
+): Promise<{ username: string; role: MemberRole }> {
+  return apiFetch(`/members/${encodeURIComponent(sub)}`, {
+    method: 'PUT',
+    body:   JSON.stringify({ role }),
+  });
+}
+
+export function disableMember(sub: string): Promise<{ username: string; enabled: boolean }> {
+  return apiFetch(`/members/${encodeURIComponent(sub)}`, { method: 'DELETE' });
+}
+
 // ── QuickSight embed ──────────────────────────────────────────────────────────
 
 export type DashboardKey =
