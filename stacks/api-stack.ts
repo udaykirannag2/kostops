@@ -266,6 +266,38 @@ export class ApiStack extends cdk.Stack {
       logRetention:  logs.RetentionDays.TWO_WEEKS,
     });
 
+    // ── Lambda: quicksight-embed-handler ──────────────────────────────────────
+    // Serves the /dashboard/quicksight-url route the React EmbedPage hits on
+    // every Cost Visibility / Optimization page load. Returns {configured:false}
+    // gracefully if the optional QuickSight stack isn't installed, so the UI
+    // renders a "Set up QuickSight" card instead of failing to fetch.
+    const quicksightEmbedHandler = new lambda.Function(this, 'QuickSightEmbedHandler', {
+      functionName:  'kostops-quicksight-embed-handler',
+      runtime:       lambda.Runtime.PYTHON_3_12,
+      handler:       'quicksight_embed_handler.handler',
+      code:          lambda.Code.fromAsset('lambda'),
+      role:          lambdaRole,
+      timeout:       cdk.Duration.seconds(30),
+      memorySize:    128,
+      environment:   {
+        ...commonEnv,
+        AWS_ACCOUNT_ID: this.account,
+      },
+      logRetention:  logs.RetentionDays.TWO_WEEKS,
+    });
+    // QuickSight anonymous-embed permissions — broad actions, no resource ARNs
+    // because the dashboard ARN is computed per-request and may not exist yet.
+    quicksightEmbedHandler.addToRolePolicy(new iam.PolicyStatement({
+      sid:     'QuickSightEmbed',
+      actions: [
+        'quicksight:GenerateEmbedUrlForAnonymousUser',
+        'quicksight:GenerateEmbedUrlForRegisteredUser',
+        'quicksight:RegisterUser',
+        'quicksight:DescribeDashboard',
+      ],
+      resources: ['*'],
+    }));
+
     // ── API Gateway account-level CloudWatch Logs role ────────────────────────
     // Required once per account for API Gateway to write access logs to CW.
     const apiGwLogsRole = new iam.Role(this, 'ApiGatewayCloudWatchRole', {
@@ -427,6 +459,14 @@ export class ApiStack extends cdk.Stack {
     monthlySpendResource.addMethod(
       'GET',
       new apigateway.LambdaIntegration(dashboardHandler, { proxy: true }),
+      authOptions,
+    );
+
+    // GET /dashboard/quicksight-url — called by every EmbedPage on load
+    const quicksightUrlResource = dashboardResource.addResource('quicksight-url');
+    quicksightUrlResource.addMethod(
+      'GET',
+      new apigateway.LambdaIntegration(quicksightEmbedHandler, { proxy: true }),
       authOptions,
     );
 
