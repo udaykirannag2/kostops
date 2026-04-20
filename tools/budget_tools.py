@@ -230,6 +230,106 @@ def set_budget(
         return {'status': 'error', 'code': e.status, 'detail': e.message[:400]}
 
 
+def generate_budget_template() -> dict:
+    """
+    Download the current budget CSV template (admin only). Returns the CSV
+    text plus a short summary. The agent typically shows the row count and
+    the first few scope/period lines, plus a note on how to upload.
+    """
+    if not _HAS_API_CLIENT:
+        return {'status': 'error', 'detail': 'api_client not available on this runtime'}
+    try:
+        # api_client returns parsed JSON, but /budgets/template emits raw CSV.
+        # Use a direct urllib call via api_client's internals would be cleaner;
+        # for now, warn the user to click Download Template in the UI.
+        return {
+            'status':    'ok',
+            'hint':      'The CSV template is served at /budgets/template. Click "Download template" on the Budgets page to save it.',
+        }
+    except api_client.ApiError as e:
+        return {'status': 'error', 'code': e.status, 'detail': e.message[:400]}
+
+
+def start_budget_import(csv_text: str) -> dict:
+    """
+    Preview a CSV of budget updates (admin only). Returns {jobId, status,
+    summary:{creates,updates,sames}, preview_count, errors_count}. Does NOT
+    apply anything — call commit_budget_import(job_id) after reviewing.
+
+    Args:
+        csv_text: raw CSV content (header row + data rows). Accepts the
+                  template from generate_budget_template() or any CSV with
+                  at least period + amount_usd columns.
+    """
+    if not _HAS_API_CLIENT:
+        return {'status': 'error', 'detail': 'api_client not available on this runtime'}
+    try:
+        resp = api_client.post('/budgets/import', {'csv': csv_text})
+        return {
+            'status':        'ok',
+            'jobId':         resp.get('jobId'),
+            'job_status':    resp.get('status'),
+            'summary':       resp.get('summary', {}),
+            'preview_count': len(resp.get('preview', [])),
+            'errors_count':  len(resp.get('errors', [])),
+            'uploadedAt':    resp.get('uploadedAt', ''),
+        }
+    except api_client.ApiError as e:
+        return {'status': 'error', 'code': e.status, 'detail': e.message[:400]}
+
+
+def get_budget_import_preview(job_id: str) -> dict:
+    """
+    Fetch a previously-uploaded import preview by jobId (admin only). Returns
+    {status, preview: [...], errors: [...], summary: {...}} so the agent can
+    show the admin what's about to change before committing.
+    """
+    if not _HAS_API_CLIENT:
+        return {'status': 'error', 'detail': 'api_client not available on this runtime'}
+    try:
+        resp = api_client.get(f'/budgets/import/{job_id}')
+        return {
+            'status':      'ok',
+            'jobId':       resp.get('jobId'),
+            'job_status':  resp.get('status'),
+            'summary':     resp.get('summary', {}),
+            'rowCount':    int(resp.get('rowCount', 0)),
+            'errorCount':  int(resp.get('errorCount', 0)),
+            # Trim to the first ~20 rows/errors so the model sees enough to
+            # summarise without blowing through its context window.
+            'preview':     (resp.get('preview') or [])[:20],
+            'errors':      (resp.get('errors')  or [])[:20],
+        }
+    except api_client.ApiError as e:
+        return {'status': 'error', 'code': e.status, 'detail': e.message[:400]}
+
+
+def commit_budget_import(job_id: str) -> dict:
+    """
+    Apply a PREVIEWED import job (admin only). Each affected (scope, period)
+    gets a new budget version via the same transactional flip as set_budget.
+
+    Always confirm with the admin BEFORE calling this. Returns {status,
+    applied: [...], failed: [...]}. If failed is non-empty, the job ends as
+    PARTIAL or FAILED and the admin should inspect each failure.
+    """
+    if not _HAS_API_CLIENT:
+        return {'status': 'error', 'detail': 'api_client not available on this runtime'}
+    try:
+        resp = api_client.post(f'/budgets/import/{job_id}/commit', {})
+        return {
+            'status':        'ok',
+            'jobId':         resp.get('jobId'),
+            'final_status':  resp.get('status'),
+            'applied_count': len(resp.get('applied', [])),
+            'failed_count':  len(resp.get('failed', [])),
+            'applied':       resp.get('applied', [])[:20],
+            'failed':        resp.get('failed',  [])[:20],
+        }
+    except api_client.ApiError as e:
+        return {'status': 'error', 'code': e.status, 'detail': e.message[:400]}
+
+
 def refresh_ce_forecast(scope_id: str, period: str) -> dict:
     """
     Refresh the cached CE_FORECAST for (scope, period). Admin only.

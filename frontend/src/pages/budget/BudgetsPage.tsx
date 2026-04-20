@@ -1,11 +1,13 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Loader2, RefreshCw, Save, History, Pencil, X } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Loader2, RefreshCw, Save, History, Pencil, X, Download, Upload } from 'lucide-react';
 import clsx from 'clsx';
 import {
   listScopes, getCurrentBudget, setBudget, getBudgetHistory,
-  type Scope, type BudgetVersion,
+  downloadBudgetTemplate, importBudgetCsv,
+  type Scope, type BudgetVersion, type ImportPreviewResponse,
 } from '../../api/client';
 import { useRole } from '../../auth/useRole';
+import ImportPreviewDrawer from './ImportPreviewDrawer';
 
 const CURRENCY = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
 
@@ -34,6 +36,48 @@ export default function BudgetsPage() {
   const [historyScope, setHistoryScope] = useState<Scope | null>(null);
   const [historyVersions, setHistoryVersions] = useState<BudgetVersion[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
+
+  const [downloading, setDownloading] = useState(false);
+  const [uploading,   setUploading]   = useState(false);
+  const [preview,     setPreview]     = useState<ImportPreviewResponse | null>(null);
+  const fileInputRef                  = useRef<HTMLInputElement | null>(null);
+
+  async function handleDownloadTemplate() {
+    setDownloading(true);
+    setError(null);
+    try {
+      const csv = await downloadBudgetTemplate();
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement('a');
+      const d    = new Date();
+      a.href     = url;
+      a.download = `kostops-budget-template-${d.toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Template download failed');
+    } finally {
+      setDownloading(false);
+    }
+  }
+
+  async function handleUploadFile(file: File) {
+    setUploading(true);
+    setError(null);
+    try {
+      const text = await file.text();
+      const resp = await importBudgetCsv(text);
+      setPreview(resp);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'CSV import failed');
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  }
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -100,17 +144,51 @@ export default function BudgetsPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
         <div className="text-sm text-slate-500">
           {scopes.length} scopes × {displayPeriods.length} periods
           {!isAdmin && <span className="ml-2 text-xs text-amber-600">(read-only — admin required to edit)</span>}
         </div>
-        <button
-          onClick={load}
-          className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-50"
-        >
-          <RefreshCw size={14} /> Refresh
-        </button>
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            onClick={load}
+            className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-50"
+          >
+            <RefreshCw size={14} /> Refresh
+          </button>
+          {isAdmin && (
+            <>
+              <button
+                onClick={handleDownloadTemplate}
+                disabled={downloading}
+                className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+              >
+                {downloading ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+                Download template
+              </button>
+              <label
+                className={clsx(
+                  'inline-flex items-center gap-1.5 rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white',
+                  uploading ? 'opacity-50 cursor-wait' : 'hover:bg-indigo-700 cursor-pointer',
+                )}
+              >
+                {uploading ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
+                Upload CSV
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".csv,text/csv"
+                  disabled={uploading}
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) handleUploadFile(f);
+                  }}
+                  className="hidden"
+                />
+              </label>
+            </>
+          )}
+        </div>
       </div>
 
       {error && (
@@ -216,6 +294,14 @@ export default function BudgetsPage() {
           versions={historyVersions}
           loading={historyLoading}
           onClose={() => setHistoryOpen(false)}
+        />
+      )}
+
+      {preview && (
+        <ImportPreviewDrawer
+          preview={preview}
+          onCommitted={() => { load(); }}
+          onClose={() => setPreview(null)}
         />
       )}
 

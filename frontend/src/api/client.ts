@@ -299,6 +299,81 @@ export function setBudget(scopeId: string, period: string, input: SetBudgetInput
   );
 }
 
+// ── CSV import (Phase 2) ──────────────────────────────────────────────
+
+export type ImportJobStatus = 'PREVIEWED' | 'NO_CHANGES' | 'APPLIED' | 'PARTIAL' | 'FAILED';
+
+export interface ImportPreviewRow {
+  row:          number;
+  scopeId:      string;
+  scopeName:    string;
+  period:       string;
+  amountUsd:    number;
+  granularity:  BudgetGranularity;
+  note?:        string;
+  currentUsd:   number | null;
+  deltaUsd:     number | null;
+  changeType:   'create' | 'update' | 'same';
+}
+export interface ImportErrorRow {
+  row:    number;
+  field:  string;
+  value:  string;
+  reason: string;
+}
+export interface ImportPreviewResponse {
+  jobId:       string;
+  status:      ImportJobStatus;
+  preview:     ImportPreviewRow[];
+  errors:      ImportErrorRow[];
+  summary:     { creates: number; updates: number; sames: number };
+  uploadedAt:  string;
+}
+
+export interface ImportCommitResponse {
+  jobId:   string;
+  status:  ImportJobStatus;
+  applied: Array<{ scopeId: string; period: string; version: number; amountUsd: number }>;
+  failed:  Array<{ scopeId: string; period: string; reason: string }>;
+}
+
+/**
+ * Fetch the pre-filled CSV template. Returns raw CSV text (text/csv).
+ * The caller turns it into a Blob and offers "Save As…".
+ */
+export async function downloadBudgetTemplate(): Promise<string> {
+  const [token, { apiUrl }] = await Promise.all([
+    fetchAuthSession().then((s) => s.tokens?.idToken?.toString() ?? ''),
+    getRuntimeConfig(),
+  ]);
+  if (!token) throw new Error('Not authenticated');
+  const resp = await fetch(`${apiUrl}/budgets/template`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!resp.ok) throw new Error(`Template download failed (${resp.status})`);
+  return resp.text();
+}
+
+export function importBudgetCsv(csvText: string): Promise<ImportPreviewResponse> {
+  return apiFetch<ImportPreviewResponse>('/budgets/import', {
+    method: 'POST',
+    body:   JSON.stringify({ csv: csvText }),
+  });
+}
+
+export function getImportPreview(jobId: string): Promise<ImportPreviewResponse & {
+  rowCount: number; errorCount: number;
+}> {
+  return apiFetch(`/budgets/import/${encodeURIComponent(jobId)}`);
+}
+
+export function commitImport(jobId: string): Promise<ImportCommitResponse> {
+  return apiFetch<ImportCommitResponse>(
+    `/budgets/import/${encodeURIComponent(jobId)}/commit`,
+    { method: 'POST' },
+  );
+}
+
 // ── Forecasts & scope actuals ─────────────────────────────────────────
 
 export interface ForecastRecord {

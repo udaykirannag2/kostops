@@ -39,6 +39,11 @@ from tools.budget_tools import (
     # admin writes
     set_budget,
     refresh_ce_forecast,
+    # CSV planning workflow (Phase 2)
+    generate_budget_template,
+    start_budget_import,
+    get_budget_import_preview,
+    commit_budget_import,
 )
 
 from ._common import SpecialistAgent
@@ -83,6 +88,21 @@ dispatching to you, so you may call these freely):
 - archive_scope(scope_id)  — soft delete, preserves history
 - set_budget(scope_id, period, amount_usd, granularity?, note?)
 - refresh_ce_forecast(scope_id, period)  — re-pulls Cost Explorer forecast
+
+CSV PLANNING WORKFLOW (Phase 2):
+- generate_budget_template()  — tells the admin how to grab the CSV template
+- start_budget_import(csv_text)  — uploads CSV content, returns jobId +
+  preview + errors. Always show the summary and a few preview rows back.
+- get_budget_import_preview(job_id)  — re-fetch a preview by jobId
+- commit_budget_import(job_id)  — applies the preview as new budget versions
+
+CSV round-trip protocol (strict):
+1. If the admin pastes CSV or an edited template, call start_budget_import(csv).
+2. Restate what's about to apply — "creates:X, updates:Y, errors:Z" — and
+   spot-check a row or two (scope name → amount). Point out any errors.
+3. Ask for explicit confirmation ("yes" / "go ahead"). ONLY then call
+   commit_budget_import(jobId).
+4. Report applied count + any failures verbatim. Never retry on your own.
 
 CONFIRMATION RULE (applies to all writes):
 Before every write, restate the change in ONE sentence and ask the user to
@@ -154,6 +174,11 @@ TOOLS = [
     archive_scope,
     set_budget,
     refresh_ce_forecast,
+    # CSV round-trip (Phase 2)
+    generate_budget_template,
+    start_budget_import,
+    get_budget_import_preview,
+    commit_budget_import,
 ]
 
 

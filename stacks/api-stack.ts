@@ -321,6 +321,23 @@ export class ApiStack extends cdk.Stack {
       logRetention:  logs.RetentionDays.TWO_WEEKS,
     });
 
+    // ── Lambda: budget-import-handler (Phase 2 CSV workflow) ────────────────
+    // Serves GET /budgets/template, POST /budgets/import, GET
+    // /budgets/import/{jobId}, and POST /budgets/import/{jobId}/commit.
+    // Gets a little more memory than the other handlers because CSV parsing +
+    // per-row budget transactions can touch DynamoDB many times.
+    const budgetImportHandler = new lambda.Function(this, 'BudgetImportHandler', {
+      functionName:  'kostops-budget-import-handler',
+      runtime:       lambda.Runtime.PYTHON_3_12,
+      handler:       'budget_import_handler.handler',
+      code:          lambda.Code.fromAsset('lambda'),
+      role:          lambdaRole,
+      timeout:       cdk.Duration.seconds(120),   // big CSVs may need it
+      memorySize:    256,
+      environment:   commonEnv,
+      logRetention:  logs.RetentionDays.TWO_WEEKS,
+    });
+
     // ── Lambda: forecasts-handler ────────────────────────────────────────────
     const forecastsHandler = new lambda.Function(this, 'ForecastsHandler', {
       functionName:  'kostops-forecasts-handler',
@@ -581,14 +598,42 @@ export class ApiStack extends cdk.Stack {
       authOptions,
     );
 
-    // /budgets — versioned budget CRUD (Phase 1)
-    //   GET /budgets?scopeId=&period=             current version
-    //   GET /budgets/{scopeId}/history            all versions
-    //   PUT /budgets/{scopeId}/{period}           new version (admin)
+    // /budgets — versioned budget CRUD (Phase 1) + CSV import (Phase 2)
+    //   GET  /budgets?scopeId=&period=             current version
+    //   GET  /budgets/template                     CSV template (admin)
+    //   POST /budgets/import                       preview CSV (admin)
+    //   GET  /budgets/import/{jobId}               fetch preview (admin)
+    //   POST /budgets/import/{jobId}/commit        apply CSV (admin)
+    //   GET  /budgets/{scopeId}/history            all versions
+    //   PUT  /budgets/{scopeId}/{period}           new version (admin)
     const budgetsResource       = api.root.addResource('budgets');
     budgetsResource.addMethod(
       'GET',
       new apigateway.LambdaIntegration(budgetsHandler, { proxy: true }),
+      authOptions,
+    );
+    const budgetTemplateResource = budgetsResource.addResource('template');
+    budgetTemplateResource.addMethod(
+      'GET',
+      new apigateway.LambdaIntegration(budgetImportHandler, { proxy: true }),
+      authOptions,
+    );
+    const budgetImportResource  = budgetsResource.addResource('import');
+    budgetImportResource.addMethod(
+      'POST',
+      new apigateway.LambdaIntegration(budgetImportHandler, { proxy: true }),
+      authOptions,
+    );
+    const budgetImportJobResource = budgetImportResource.addResource('{jobId}');
+    budgetImportJobResource.addMethod(
+      'GET',
+      new apigateway.LambdaIntegration(budgetImportHandler, { proxy: true }),
+      authOptions,
+    );
+    const budgetImportCommitResource = budgetImportJobResource.addResource('commit');
+    budgetImportCommitResource.addMethod(
+      'POST',
+      new apigateway.LambdaIntegration(budgetImportHandler, { proxy: true }),
       authOptions,
     );
     const budgetScopeResource   = budgetsResource.addResource('{scopeId}');
