@@ -299,6 +299,94 @@ export function setBudget(scopeId: string, period: string, input: SetBudgetInput
   );
 }
 
+// ── Allocation rules (Phase 3) ────────────────────────────────────────
+
+export type AllocationRuleType =
+  | 'PERCENTAGE' | 'DIRECT' | 'FIXED_SPLIT' | 'USAGE_BASED' | 'MANUAL';
+export type AllocationStatus = 'active' | 'archived';
+
+export interface AllocationSplit {
+  targetScopeId: string;
+  pct:           number;
+}
+
+export interface AllocationRule {
+  ruleId:            string;
+  sourceAccountId:   string;
+  ruleType:          AllocationRuleType;
+  splits:            AllocationSplit[];
+  status:            AllocationStatus;
+  effectiveFrom?:    string;
+  effectiveTo?:      string | null;
+  note?:             string;
+  createdBy?:        string;
+  createdAt?:        string;
+  updatedBy?:        string;
+  updatedAt?:        string;
+}
+
+export interface AllocationRulesResponse { rules: AllocationRule[]; count: number }
+
+export interface AllocationRuleInput {
+  sourceAccountId: string;
+  ruleType?:       AllocationRuleType;
+  splits:          AllocationSplit[];
+  effectiveFrom?:  string;
+  effectiveTo?:    string;
+  note?:           string;
+}
+
+export interface AllocationPreviewRow {
+  targetScopeId:   string;
+  targetScopeName: string;
+  pct:             number;
+  projectedUsd:    number;
+}
+
+export interface AllocationPreviewResponse {
+  ruleId:          string;
+  sourceAccountId: string;
+  period:          string;
+  sourceTotalUsd:  number;
+  ruleType:        AllocationRuleType;
+  projected:       AllocationPreviewRow[];
+}
+
+export function listAllocations(sourceAccountId?: string, status: AllocationStatus = 'active'): Promise<AllocationRulesResponse> {
+  const qs = new URLSearchParams({ status });
+  if (sourceAccountId) qs.set('sourceAccountId', sourceAccountId);
+  return apiFetch<AllocationRulesResponse>(`/allocations?${qs.toString()}`);
+}
+
+export function getAllocation(ruleId: string): Promise<AllocationRule> {
+  return apiFetch<AllocationRule>(`/allocations/${encodeURIComponent(ruleId)}`);
+}
+
+export function createAllocation(input: AllocationRuleInput): Promise<AllocationRule> {
+  return apiFetch<AllocationRule>('/allocations', {
+    method: 'POST',
+    body:   JSON.stringify(input),
+  });
+}
+
+export function updateAllocation(ruleId: string, patch: Partial<AllocationRuleInput>): Promise<AllocationRule> {
+  return apiFetch<AllocationRule>(`/allocations/${encodeURIComponent(ruleId)}`, {
+    method: 'PUT',
+    body:   JSON.stringify(patch),
+  });
+}
+
+export function archiveAllocation(ruleId: string): Promise<{ ruleId: string; status: string }> {
+  return apiFetch(`/allocations/${encodeURIComponent(ruleId)}`, { method: 'DELETE' });
+}
+
+export function previewAllocation(ruleId: string, period: string): Promise<AllocationPreviewResponse> {
+  return apiFetch<AllocationPreviewResponse>(
+    `/allocations/${encodeURIComponent(ruleId)}/preview`,
+    { method: 'POST', body: JSON.stringify({ period }) },
+  );
+}
+
 // ── CSV import (Phase 2) ──────────────────────────────────────────────
 
 export type ImportJobStatus = 'PREVIEWED' | 'NO_CHANGES' | 'APPLIED' | 'PARTIAL' | 'FAILED';

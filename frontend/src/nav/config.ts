@@ -71,6 +71,11 @@ export const NAV_SECTIONS: NavSection[] = [
         path:        '/visibility/budget-dashboard',
         description: 'Budget vs forecast by scope for the current period.',
       },
+      {
+        label:       'Allocations',
+        path:        '/visibility/allocations',
+        description: 'Split shared-account cost across target scopes (admin only).',
+      },
     ],
   },
   {

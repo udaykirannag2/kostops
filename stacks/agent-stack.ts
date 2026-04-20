@@ -17,6 +17,8 @@ interface AgentStackProps extends cdk.StackProps {
   budgetsTable?:              ddb.Table;
   forecastsTable?:            ddb.Table;
   scopeActualsTable?:         ddb.Table;
+  /** Allocation rules table — Phase 3; also read-only from the agent. */
+  allocationRulesTable?:      ddb.Table;
   payerCurBucketName:         string;
   athenaResultsBucketName:    string;
   payerAccountId:             string;
@@ -170,10 +172,11 @@ export class AgentStack extends cdk.Stack {
     // Budget Agent — read-only from the agent. Writes go through the KostOps
     // API so the Cognito authorizer re-validates admin role and every
     // mutation lands a source=CHAT audit row.
-    if (props.scopesTable)       props.scopesTable.grantReadData(agentRole);
-    if (props.budgetsTable)      props.budgetsTable.grantReadData(agentRole);
-    if (props.forecastsTable)    props.forecastsTable.grantReadData(agentRole);
-    if (props.scopeActualsTable) props.scopeActualsTable.grantReadData(agentRole);
+    if (props.scopesTable)          props.scopesTable.grantReadData(agentRole);
+    if (props.budgetsTable)         props.budgetsTable.grantReadData(agentRole);
+    if (props.forecastsTable)       props.forecastsTable.grantReadData(agentRole);
+    if (props.scopeActualsTable)    props.scopeActualsTable.grantReadData(agentRole);
+    if (props.allocationRulesTable) props.allocationRulesTable.grantReadData(agentRole);
 
     // Organizations read — list_ous / list_accounts_in_ou / list_parents.
     // Uses the payer role (AssumePayerRole granted above) so we don't add a
@@ -374,10 +377,11 @@ export class AgentStack extends cdk.Stack {
         EnvBedrockModelId:     props.bedrockModelId ?? 'us.anthropic.claude-sonnet-4-5-20250929-v1:0',
         EnvPayerAccountId:     props.payerAccountId,
         EnvPayerRole:          props.payerCrossAccountRoleArn,
-        EnvScopesTable:        props.scopesTable?.tableName       ?? '',
-        EnvBudgetsTable:       props.budgetsTable?.tableName      ?? '',
-        EnvForecastsTable:     props.forecastsTable?.tableName    ?? '',
-        EnvScopeActualsTable:  props.scopeActualsTable?.tableName ?? '',
+        EnvScopesTable:          props.scopesTable?.tableName          ?? '',
+        EnvBudgetsTable:         props.budgetsTable?.tableName         ?? '',
+        EnvForecastsTable:       props.forecastsTable?.tableName       ?? '',
+        EnvScopeActualsTable:    props.scopeActualsTable?.tableName    ?? '',
+        EnvAllocationsTable:     props.allocationRulesTable?.tableName ?? '',
       },
     });
 

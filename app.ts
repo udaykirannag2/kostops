@@ -60,6 +60,7 @@ const agentStack = new AgentStack(app, 'KostOpsAgentStack', {
   budgetsTable:              dataStack.budgetsTable,
   forecastsTable:            dataStack.forecastsTable,
   scopeActualsTable:         dataStack.scopeActualsTable,
+  allocationRulesTable:      dataStack.allocationRulesTable,
   payerCurBucketName,
   athenaResultsBucketName:   dataStack.athenaResultsBucketName,
   payerAccountId,
@@ -97,6 +98,7 @@ const apiStack = new ApiStack(app, 'KostOpsApiStack', {
   forecastsTable:            dataStack.forecastsTable,
   scopeActualsTable:         dataStack.scopeActualsTable,
   importJobsTable:           dataStack.importJobsTable,
+  allocationRulesTable:      dataStack.allocationRulesTable,
   agentEndpointUrl:          agentStack.agentEndpointUrl,
   agentRuntimeArn:           '',  // patched by agentcore_deploy.py post-create
   userPool:                  authStack.userPool,

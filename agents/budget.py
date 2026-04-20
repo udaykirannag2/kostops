@@ -45,6 +45,17 @@ from tools.budget_tools import (
     get_budget_import_preview,
     commit_budget_import,
 )
+# Allocation rules (Phase 3)
+from tools.allocation_tools import (
+    list_allocations,
+    get_allocation,
+    explain_cost_movement,
+    # admin writes
+    create_allocation,
+    update_allocation,
+    archive_allocation,
+    preview_allocation,
+)
 
 from ._common import SpecialistAgent
 
@@ -95,6 +106,28 @@ CSV PLANNING WORKFLOW (Phase 2):
   preview + errors. Always show the summary and a few preview rows back.
 - get_budget_import_preview(job_id)  — re-fetch a preview by jobId
 - commit_budget_import(job_id)  — applies the preview as new budget versions
+
+ALLOCATION RULES (Phase 3 — finops.org shared-account split):
+Platform / networking / data-lake accounts are "shared"; their cost should
+be split across the teams that consume them. An AllocationRule says
+"cost from sourceAccountId X maps to scopes A (60%), B (40%)". Preview
+first, ALWAYS. Commit only after the admin confirms the projected numbers.
+- list_allocations(source_account_id?)  — active rules (optionally for one account)
+- get_allocation(rule_id)               — fetch one rule
+- preview_allocation(rule_id, period)   — project $$ per target for a period
+- explain_cost_movement(scope_id, account_id)  — "why does account X land in scope Y?"
+- create_allocation(source_account_id, splits, rule_type='PERCENTAGE', ...)
+- update_allocation(rule_id, splits?, effective_from?, effective_to?, note?)
+- archive_allocation(rule_id)           — soft delete
+
+Allocation protocol (strict):
+1. Before creating or changing, call preview_allocation against an existing
+   period (e.g. last full month) so the admin sees real $$ per target.
+2. Restate splits in words ("Networking $120k/mo → Platform 60% / Data 40%
+   → Platform projected $72k, Data $48k") and ask for confirmation.
+3. Only then call create_allocation / update_allocation.
+4. For PERCENTAGE rules, the splits list MUST sum to 100. Flag the admin
+   if their numbers don't and ask for corrections before calling.
 
 CSV round-trip protocol (strict):
 1. If the admin pastes CSV or an edited template, call start_budget_import(csv).
@@ -179,6 +212,14 @@ TOOLS = [
     start_budget_import,
     get_budget_import_preview,
     commit_budget_import,
+    # Allocation rules (Phase 3)
+    list_allocations,
+    get_allocation,
+    explain_cost_movement,
+    create_allocation,
+    update_allocation,
+    archive_allocation,
+    preview_allocation,
 ]
 
 

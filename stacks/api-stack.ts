@@ -19,6 +19,7 @@ interface ApiStackProps extends cdk.StackProps {
   forecastsTable:          ddb.Table;
   scopeActualsTable:       ddb.Table;
   importJobsTable:         ddb.Table;
+  allocationRulesTable:    ddb.Table;
   agentEndpointUrl:        string;
   userPool:                cognito.UserPool;
   slackWebhookUrl:         string;
@@ -75,6 +76,8 @@ export class ApiStack extends cdk.Stack {
     props.forecastsTable.grantReadWriteData(lambdaRole);
     props.scopeActualsTable.grantReadWriteData(lambdaRole);
     props.importJobsTable.grantReadWriteData(lambdaRole);
+    // Allocation rules (Phase 3)
+    props.allocationRulesTable.grantReadWriteData(lambdaRole);
 
     // SSM access for integrations-handler and slack-handler (read/write secrets)
     lambdaRole.addToPolicy(new iam.PolicyStatement({
@@ -132,6 +135,7 @@ export class ApiStack extends cdk.Stack {
       FORECASTS_TABLE:           props.forecastsTable.tableName,
       SCOPE_ACTUALS_TABLE:       props.scopeActualsTable.tableName,
       IMPORT_JOBS_TABLE:         props.importJobsTable.tableName,
+      ALLOCATIONS_TABLE:         props.allocationRulesTable.tableName,
       USER_POOL_ID:              props.userPool.userPoolId,
       AGENT_ENDPOINT_URL:        props.agentEndpointUrl,
       AGENT_RUNTIME_ARN:         props.agentRuntimeArn,
@@ -347,6 +351,21 @@ export class ApiStack extends cdk.Stack {
       role:          lambdaRole,
       timeout:       cdk.Duration.seconds(30),
       memorySize:    128,
+      environment:   commonEnv,
+      logRetention:  logs.RetentionDays.TWO_WEEKS,
+    });
+
+    // ── Lambda: allocations-handler (Phase 3) ───────────────────────────────
+    // CRUD + preview for AllocationRules. Preview runs a focused Athena query
+    // for the source account's period cost and applies the rule's split pcts.
+    const allocationsHandler = new lambda.Function(this, 'AllocationsHandler', {
+      functionName:  'kostops-allocations-handler',
+      runtime:       lambda.Runtime.PYTHON_3_12,
+      handler:       'allocations_handler.handler',
+      code:          lambda.Code.fromAsset('lambda'),
+      role:          lambdaRole,
+      timeout:       cdk.Duration.seconds(90),   // Athena preview can be slow
+      memorySize:    256,
       environment:   commonEnv,
       logRetention:  logs.RetentionDays.TWO_WEEKS,
     });
@@ -647,6 +666,47 @@ export class ApiStack extends cdk.Stack {
     budgetPeriodResource.addMethod(
       'PUT',
       new apigateway.LambdaIntegration(budgetsHandler, { proxy: true }),
+      authOptions,
+    );
+
+    // /allocations — shared-account cost allocation rules (Phase 3)
+    //   GET    /allocations                        list active rules
+    //   POST   /allocations                        create (admin)
+    //   GET    /allocations/{ruleId}               fetch one
+    //   PUT    /allocations/{ruleId}               update (admin)
+    //   DELETE /allocations/{ruleId}               soft-delete (admin)
+    //   POST   /allocations/{ruleId}/preview       project impact for a period (admin)
+    const allocationsResource       = api.root.addResource('allocations');
+    allocationsResource.addMethod(
+      'GET',
+      new apigateway.LambdaIntegration(allocationsHandler, { proxy: true }),
+      authOptions,
+    );
+    allocationsResource.addMethod(
+      'POST',
+      new apigateway.LambdaIntegration(allocationsHandler, { proxy: true }),
+      authOptions,
+    );
+    const allocationRuleResource    = allocationsResource.addResource('{ruleId}');
+    allocationRuleResource.addMethod(
+      'GET',
+      new apigateway.LambdaIntegration(allocationsHandler, { proxy: true }),
+      authOptions,
+    );
+    allocationRuleResource.addMethod(
+      'PUT',
+      new apigateway.LambdaIntegration(allocationsHandler, { proxy: true }),
+      authOptions,
+    );
+    allocationRuleResource.addMethod(
+      'DELETE',
+      new apigateway.LambdaIntegration(allocationsHandler, { proxy: true }),
+      authOptions,
+    );
+    const allocationPreviewResource = allocationRuleResource.addResource('preview');
+    allocationPreviewResource.addMethod(
+      'POST',
+      new apigateway.LambdaIntegration(allocationsHandler, { proxy: true }),
       authOptions,
     );
 

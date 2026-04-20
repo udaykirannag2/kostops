@@ -56,6 +56,9 @@ export class DataStack extends cdk.Stack {
   public readonly scopeActualsTable: ddb.Table;
   public readonly importJobsTable:  ddb.Table;
 
+  /** Allocation rules (Phase 3) — split shared-account cost across target scopes */
+  public readonly allocationRulesTable: ddb.Table;
+
   /** Athena results bucket name — passed to AgentStack for write permissions */
   public readonly athenaResultsBucketName: string;
 
@@ -445,6 +448,26 @@ export class DataStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
 
+    // AllocationRules — split shared-account cost across target scopes.
+    //   pk: sourceAccountId    12-digit AWS account id that OWNS the cost
+    //   sk: ruleId              "r_<uuid12>"
+    //   attrs: ruleType (PERCENTAGE | DIRECT | FIXED_SPLIT | USAGE_BASED | MANUAL),
+    //          splits (list of {targetScopeId, pct, tagFilter?}),
+    //          effectiveFrom, effectiveTo, status (active|archived),
+    //          note, createdBy, createdAt, updatedBy, updatedAt
+    //   GSI byTargetScope: look up every rule that splits cost INTO a given scope
+    //                      (required by explain_cost_movement / budget refresh).
+    this.allocationRulesTable = new ddb.Table(this, 'AllocationRulesTable', {
+      tableName:    'kostops-allocation-rules',
+      partitionKey: { name: 'sourceAccountId', type: ddb.AttributeType.STRING },
+      sortKey:      { name: 'ruleId',          type: ddb.AttributeType.STRING },
+      billingMode:  ddb.BillingMode.PAY_PER_REQUEST,
+      encryption:   ddb.TableEncryption.AWS_MANAGED,
+      pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+      stream:        ddb.StreamViewType.NEW_AND_OLD_IMAGES, // Athena export pipeline (later phase)
+    });
+
     // ImportJobs — CSV budget template upload / preview / commit lifecycle.
     //   pk: jobId
     //   attrs: uploadedBy, s3Key, status (PENDING|PREVIEWED|APPLIED|FAILED),
@@ -478,6 +501,10 @@ export class DataStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'BudgetsTableName', {
       value:       this.budgetsTable.tableName,
       description: 'DynamoDB budgets table (versioned)',
+    });
+    new cdk.CfnOutput(this, 'AllocationRulesTableName', {
+      value:       this.allocationRulesTable.tableName,
+      description: 'DynamoDB allocation rules table',
     });
     new cdk.CfnOutput(this, 'AthenaWorkgroup', {
       value:       'kostops-workgroup',

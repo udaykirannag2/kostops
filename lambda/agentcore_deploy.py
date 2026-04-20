@@ -90,6 +90,8 @@ def _handle_create_or_update(props: dict) -> dict:
         'BUDGETS_TABLE':            props.get('EnvBudgetsTable',         ''),
         'FORECASTS_TABLE':          props.get('EnvForecastsTable',       ''),
         'SCOPE_ACTUALS_TABLE':      props.get('EnvScopeActualsTable',    ''),
+        # Allocation rules (Phase 3)
+        'ALLOCATIONS_TABLE':        props.get('EnvAllocationsTable',     ''),
     }
     # Strip empty values — AgentCore rejects empty strings in env vars
     env_vars = {k: v for k, v in env_vars.items() if v}
