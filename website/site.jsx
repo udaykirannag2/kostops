@@ -891,10 +891,25 @@ function ContactModal({ open, onClose }) {
     e.preventDefault();
     setStatus('sending');
     try {
-      // Falls back to mailto if EmailJS not configured
-      const mailto = `mailto:udaykirannag@gmail.com?subject=KostOps%20contact%20from%20${encodeURIComponent(form.name)}&body=${encodeURIComponent(`Name: ${form.name}\nEmail: ${form.email}\nCompany: ${form.company}\n\n${form.message}`)}`;
-      window.location.href = mailto;
-      setStatus('done');
+      const res = await fetch('https://formsubmit.co/ajax/udaykirannag@gmail.com', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        body: JSON.stringify({
+          name: form.name,
+          email: form.email,
+          company: form.company || '—',
+          message: form.message,
+          _subject: `KostOps contact from ${form.name}`,
+          _template: 'table',
+          _captcha: 'false',
+        }),
+      });
+      const data = await res.json();
+      if (data.success === 'true' || data.success === true) {
+        setStatus('done');
+      } else {
+        setStatus('error');
+      }
     } catch {
       setStatus('error');
     }
