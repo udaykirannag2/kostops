@@ -49,7 +49,7 @@ const Pill = ({ children, color = a.c.brand, bg = a.c.brandSoft }) => (
 
 // ---------- Nav ----------
 
-function Nav() {
+function Nav({ onContact }) {
   const [w, setW] = useState(typeof window !== 'undefined' ? window.innerWidth : 1280);
   useEffect(() => {
     const onResize = () => setW(window.innerWidth);
@@ -102,7 +102,7 @@ function Nav() {
               <span style={{ fontFamily: a.font.mono, fontSize: 12 }}>2.4k</span>
             </a>
           )}
-          {!compact && <Btn kind="secondary" href="#">Contact sales</Btn>}
+          {!compact && <Btn kind="secondary" href="#" onClick={(e) => { e.preventDefault(); onContact(); }}>Contact</Btn>}
           <Btn kind="primary" href="https://github.com/udaykirannag2/kostops" target="_blank" rel="noopener noreferrer" icon={
             <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.91.58.1.79-.25.79-.56 0-.28-.01-1.02-.02-2-3.2.7-3.87-1.54-3.87-1.54-.52-1.33-1.28-1.68-1.28-1.68-1.05-.71.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.76 2.7 1.25 3.36.96.1-.75.4-1.25.73-1.54-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.28 1.19-3.09-.12-.29-.52-1.46.11-3.04 0 0 .97-.31 3.18 1.18.92-.26 1.91-.39 2.89-.39.98 0 1.97.13 2.89.39 2.21-1.49 3.18-1.18 3.18-1.18.63 1.58.23 2.75.11 3.04.74.81 1.19 1.83 1.19 3.09 0 4.42-2.7 5.39-5.27 5.68.41.36.78 1.06.78 2.13 0 1.54-.01 2.78-.01 3.16 0 .31.21.67.8.56C20.21 21.39 23.5 17.08 23.5 12 23.5 5.65 18.35.5 12 .5z"/></svg>
           }>{compact ? 'Star · 2.4k' : 'Star on GitHub'}</Btn>
@@ -774,7 +774,7 @@ const StatCard = ({ value, label, icon }) => (
 
 // ---------- CTA + Footer ----------
 
-function CTA() {
+function CTA({ onContact }) {
   return (
     <section style={{ padding: '120px 0', background: a.c.bg }}>
       <Container>
@@ -802,7 +802,7 @@ function CTA() {
             </p>
             <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
               <Btn kind="brand" href="https://github.com/udaykirannag2/kostops" target="_blank" rel="noopener noreferrer">Star on GitHub</Btn>
-              <Btn kind="secondary" href="#" style={{ background: 'rgba(255,255,255,0.08)', color: '#fff', borderColor: 'rgba(255,255,255,0.18)' }}>Book a demo</Btn>
+              <Btn kind="secondary" href="#" onClick={(e) => { e.preventDefault(); onContact(); }} style={{ background: 'rgba(255,255,255,0.08)', color: '#fff', borderColor: 'rgba(255,255,255,0.18)' }}>Contact us</Btn>
             </div>
           </div>
         </div>
@@ -811,7 +811,7 @@ function CTA() {
   );
 }
 
-function Footer() {
+function Footer({ onContact }) {
   return (
     <footer style={{ padding: '64px 0 48px', background: a.c.bg, borderTop: `1px solid ${a.c.rule}` }}>
       <Container>
@@ -828,7 +828,7 @@ function Footer() {
           <FooterCol title="PRODUCT" links={['Findings', 'Compute', 'Commitments', 'Kost Agent', 'Demo']} hrefs={['#', '#', '#', '#', 'https://www.youtube.com/watch?v=c45qbWEdTcs&feature=youtu.be']} />
           <FooterCol title="OPEN SOURCE" links={['GitHub', 'Contributors', 'Roadmap', 'Discussions', 'Issues']} hrefs={['https://github.com/udaykirannag2/kostops', '#', '#', '#', '#']} />
           <FooterCol title="RESOURCES" links={['Documentation', 'Self-host guide', 'API reference', 'Discord']} hrefs={['https://github.com/udaykirannag2/kostops/blob/main/README.md', '#', '#', '#']} />
-          <FooterCol title="COMPANY" links={['About', 'Contact sales', 'Security', 'Status', 'Press kit']} />
+          <FooterCol title="COMPANY" links={['About', 'Contact', 'Security', 'Status', 'Press kit']} onContactClick={onContact} contactLabel="Contact" />
         </div>
         <div style={{
           display: 'flex', justifyContent: 'space-between', alignItems: 'center',
@@ -843,17 +843,21 @@ function Footer() {
   );
 }
 
-const FooterCol = ({ title, links, hrefs = [] }) => (
+const FooterCol = ({ title, links, hrefs = [], onContactClick, contactLabel }) => (
   <div>
     <div style={{ fontFamily: a.font.mono, fontSize: 10, color: a.c.inkDim, letterSpacing: '0.1em', marginBottom: 14 }}>{title}</div>
     <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: 10 }}>
       {links.map((l, i) => {
         const href = hrefs[i] || '#';
         const external = href.startsWith('http');
+        const isContact = onContactClick && l === contactLabel;
         return (
           <li key={l}>
-            <a href={href} target={external ? '_blank' : undefined} rel={external ? 'noopener noreferrer' : undefined}
-               style={{ fontFamily: a.font.sans, fontSize: 13, color: a.c.inkSoft, textDecoration: 'none' }}>{l}</a>
+            <a href={href}
+               onClick={isContact ? (e) => { e.preventDefault(); onContactClick(); } : undefined}
+               target={external ? '_blank' : undefined}
+               rel={external ? 'noopener noreferrer' : undefined}
+               style={{ fontFamily: a.font.sans, fontSize: 13, color: a.c.inkSoft, textDecoration: 'none', cursor: 'pointer' }}>{l}</a>
           </li>
         );
       })}
@@ -861,18 +865,170 @@ const FooterCol = ({ title, links, hrefs = [] }) => (
   </div>
 );
 
+// ---------- Contact modal ----------
+
+function ContactModal({ open, onClose }) {
+  const [form, setForm] = useState({ name: '', email: '', company: '', message: '' });
+  const [status, setStatus] = useState('idle'); // idle | sending | done | error
+
+  useEffect(() => {
+    if (!open) { setForm({ name: '', email: '', company: '', message: '' }); setStatus('idle'); }
+  }, [open]);
+
+  // Close on Escape
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open, onClose]);
+
+  function handleChange(e) {
+    setForm(f => ({ ...f, [e.target.name]: e.target.value }));
+  }
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setStatus('sending');
+    try {
+      // Falls back to mailto if EmailJS not configured
+      const mailto = `mailto:udaykirannag@gmail.com?subject=KostOps%20contact%20from%20${encodeURIComponent(form.name)}&body=${encodeURIComponent(`Name: ${form.name}\nEmail: ${form.email}\nCompany: ${form.company}\n\n${form.message}`)}`;
+      window.location.href = mailto;
+      setStatus('done');
+    } catch {
+      setStatus('error');
+    }
+  }
+
+  if (!open) return null;
+
+  const inputStyle = {
+    width: '100%', padding: '10px 12px', borderRadius: a.r.md,
+    border: `1px solid ${a.c.ruleHi}`, fontFamily: a.font.sans, fontSize: 14,
+    color: a.c.ink, background: '#fff', outline: 'none',
+    boxSizing: 'border-box', transition: 'border-color 150ms',
+  };
+  const labelStyle = {
+    display: 'block', fontFamily: a.font.mono, fontSize: 11,
+    color: a.c.inkDim, letterSpacing: '0.08em', marginBottom: 6,
+  };
+
+  return (
+    <>
+      {/* Backdrop */}
+      <div onClick={onClose} style={{
+        position: 'fixed', inset: 0, zIndex: 200,
+        background: 'rgba(11,18,32,0.45)', backdropFilter: 'blur(4px)',
+      }} />
+      {/* Panel */}
+      <div style={{
+        position: 'fixed', inset: 0, zIndex: 201,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        padding: 24, pointerEvents: 'none',
+      }}>
+        <div style={{
+          background: '#fff', borderRadius: a.r.xl + 4,
+          boxShadow: a.shadow.lg, width: '100%', maxWidth: 480,
+          pointerEvents: 'auto', overflow: 'hidden',
+        }}>
+          {/* Header */}
+          <div style={{
+            padding: '24px 28px 20px',
+            borderBottom: `1px solid ${a.c.rule}`,
+            display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between',
+          }}>
+            <div>
+              <div style={{ fontFamily: a.font.sans, fontSize: 18, fontWeight: 700, color: a.c.ink, letterSpacing: '-0.01em' }}>
+                Get in touch
+              </div>
+              <div style={{ fontFamily: a.font.sans, fontSize: 13, color: a.c.inkSoft, marginTop: 4 }}>
+                We'll get back to you within one business day.
+              </div>
+            </div>
+            <button onClick={onClose} style={{
+              background: 'none', border: 'none', cursor: 'pointer',
+              color: a.c.inkMute, padding: 4, lineHeight: 1, fontSize: 20,
+            }}>✕</button>
+          </div>
+
+          {/* Body */}
+          <div style={{ padding: '24px 28px 28px' }}>
+            {status === 'done' ? (
+              <div style={{ textAlign: 'center', padding: '32px 0' }}>
+                <div style={{ fontSize: 40, marginBottom: 16 }}>✉️</div>
+                <div style={{ fontFamily: a.font.sans, fontSize: 16, fontWeight: 600, color: a.c.ink }}>Message sent!</div>
+                <div style={{ fontFamily: a.font.sans, fontSize: 14, color: a.c.inkSoft, marginTop: 8 }}>We'll be in touch soon.</div>
+                <button onClick={onClose} style={{
+                  marginTop: 24, padding: '10px 24px', borderRadius: a.r.lg,
+                  background: a.c.ink, color: '#fff', border: 'none',
+                  fontFamily: a.font.sans, fontSize: 14, fontWeight: 600, cursor: 'pointer',
+                }}>Close</button>
+              </div>
+            ) : (
+              <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+                  <div>
+                    <label style={labelStyle}>NAME *</label>
+                    <input required name="name" value={form.name} onChange={handleChange}
+                      placeholder="Jane Smith" style={inputStyle} />
+                  </div>
+                  <div>
+                    <label style={labelStyle}>WORK EMAIL *</label>
+                    <input required type="email" name="email" value={form.email} onChange={handleChange}
+                      placeholder="jane@company.com" style={inputStyle} />
+                  </div>
+                </div>
+                <div>
+                  <label style={labelStyle}>COMPANY</label>
+                  <input name="company" value={form.company} onChange={handleChange}
+                    placeholder="Acme Corp" style={inputStyle} />
+                </div>
+                <div>
+                  <label style={labelStyle}>MESSAGE *</label>
+                  <textarea required name="message" value={form.message} onChange={handleChange}
+                    placeholder="Tell us about your AWS environment and what you're looking to solve…"
+                    rows={4} style={{ ...inputStyle, resize: 'vertical', fontFamily: a.font.sans }} />
+                </div>
+                {status === 'error' && (
+                  <div style={{ fontFamily: a.font.sans, fontSize: 13, color: a.c.red }}>
+                    Something went wrong. Please email us directly at udaykirannag@gmail.com
+                  </div>
+                )}
+                <button type="submit" disabled={status === 'sending'} style={{
+                  padding: '11px 0', borderRadius: a.r.lg,
+                  background: status === 'sending' ? a.c.inkMute : a.c.ink,
+                  color: '#fff', border: 'none', fontFamily: a.font.sans,
+                  fontSize: 14, fontWeight: 600, cursor: status === 'sending' ? 'default' : 'pointer',
+                  transition: 'background 150ms',
+                }}>
+                  {status === 'sending' ? 'Sending…' : 'Send message →'}
+                </button>
+              </form>
+            )}
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}
+
 // ---------- Page ----------
 
 function Page() {
+  const [contactOpen, setContactOpen] = useState(false);
+  const openContact = () => setContactOpen(true);
+  const closeContact = () => setContactOpen(false);
+
   return (
     <div style={{ background: a.c.bg, minHeight: '100vh' }}>
-      <Nav />
+      <Nav onContact={openContact} />
       <Hero />
       <AgentShowcase />
       <Features />
       <OpenSource />
-      <CTA />
-      <Footer />
+      <CTA onContact={openContact} />
+      <Footer onContact={openContact} />
+      <ContactModal open={contactOpen} onClose={closeContact} />
     </div>
   );
 }
