@@ -891,21 +891,18 @@ function ContactModal({ open, onClose }) {
     e.preventDefault();
     setStatus('sending');
     try {
-      const res = await fetch('https://formsubmit.co/ajax/udaykirannag@gmail.com', {
+      const res = await fetch('https://ach0e2d6w7.execute-api.us-east-1.amazonaws.com/prod/contact', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name: form.name,
           email: form.email,
-          company: form.company || '—',
+          company: form.company,
           message: form.message,
-          _subject: `KostOps contact from ${form.name}`,
-          _template: 'table',
-          _captcha: 'false',
         }),
       });
       const data = await res.json();
-      if (data.success === 'true' || data.success === true) {
+      if (data.success) {
         setStatus('done');
       } else {
         setStatus('error');
