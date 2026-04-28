@@ -57,7 +57,19 @@ function Nav() {
     return () => window.removeEventListener('resize', onResize);
   }, []);
   const compact = w < 1100;
-  const navItems = compact ? ['Product', 'Open source', 'Docs'] : ['Product', 'Open source', 'Docs', 'Changelog', 'Blog'];
+  const navItems = compact
+    ? [
+        { label: 'Product', href: '#' },
+        { label: 'Open source', href: 'https://github.com/udaykirannag2/kostops' },
+        { label: 'Docs', href: 'https://github.com/udaykirannag2/kostops/blob/main/README.md' },
+        { label: 'Demo', href: 'https://www.youtube.com/watch?v=c45qbWEdTcs&feature=youtu.be' },
+      ]
+    : [
+        { label: 'Product', href: '#' },
+        { label: 'Open source', href: 'https://github.com/udaykirannag2/kostops' },
+        { label: 'Docs', href: 'https://github.com/udaykirannag2/kostops/blob/main/README.md' },
+        { label: 'Demo', href: 'https://www.youtube.com/watch?v=c45qbWEdTcs&feature=youtu.be' },
+      ];
   return (
     <div style={{
       position: 'sticky', top: 0, zIndex: 50,
@@ -70,11 +82,11 @@ function Nav() {
           <span style={{ fontFamily: a.font.sans, fontWeight: 700, fontSize: 17, color: a.c.ink, letterSpacing: '-0.01em' }}>KostOps</span>
         </a>
         <nav style={{ display: 'flex', gap: compact ? 18 : 28, marginLeft: compact ? 8 : 16 }}>
-          {navItems.map(item => (
-            <a key={item} href="#" style={{
+          {navItems.map(({ label, href }) => (
+            <a key={label} href={href} target={href.startsWith('http') ? '_blank' : undefined} rel={href.startsWith('http') ? 'noopener noreferrer' : undefined} style={{
               fontFamily: a.font.sans, fontSize: 14, fontWeight: 500,
               color: a.c.inkSoft, textDecoration: 'none', whiteSpace: 'nowrap',
-            }}>{item}</a>
+            }}>{label}</a>
           ))}
         </nav>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 10, alignItems: 'center', flexShrink: 0 }}>
@@ -813,9 +825,9 @@ function Footer() {
               The open-source FinOps platform for AWS. Self-hosted, AI-native, MIT-licensed.
             </p>
           </div>
-          <FooterCol title="PRODUCT" links={['Findings', 'Compute', 'Commitments', 'Kost Agent', 'Changelog']} />
-          <FooterCol title="OPEN SOURCE" links={['GitHub', 'Contributors', 'Roadmap', 'Discussions', 'Issues']} />
-          <FooterCol title="RESOURCES" links={['Documentation', 'Self-host guide', 'API reference', 'Blog', 'Discord']} />
+          <FooterCol title="PRODUCT" links={['Findings', 'Compute', 'Commitments', 'Kost Agent', 'Demo']} hrefs={['#', '#', '#', '#', 'https://www.youtube.com/watch?v=c45qbWEdTcs&feature=youtu.be']} />
+          <FooterCol title="OPEN SOURCE" links={['GitHub', 'Contributors', 'Roadmap', 'Discussions', 'Issues']} hrefs={['https://github.com/udaykirannag2/kostops', '#', '#', '#', '#']} />
+          <FooterCol title="RESOURCES" links={['Documentation', 'Self-host guide', 'API reference', 'Discord']} hrefs={['https://github.com/udaykirannag2/kostops/blob/main/README.md', '#', '#', '#']} />
           <FooterCol title="COMPANY" links={['About', 'Contact sales', 'Security', 'Status', 'Press kit']} />
         </div>
         <div style={{
@@ -831,15 +843,20 @@ function Footer() {
   );
 }
 
-const FooterCol = ({ title, links }) => (
+const FooterCol = ({ title, links, hrefs = [] }) => (
   <div>
     <div style={{ fontFamily: a.font.mono, fontSize: 10, color: a.c.inkDim, letterSpacing: '0.1em', marginBottom: 14 }}>{title}</div>
     <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: 10 }}>
-      {links.map(l => (
-        <li key={l}>
-          <a href="#" style={{ fontFamily: a.font.sans, fontSize: 13, color: a.c.inkSoft, textDecoration: 'none' }}>{l}</a>
-        </li>
-      ))}
+      {links.map((l, i) => {
+        const href = hrefs[i] || '#';
+        const external = href.startsWith('http');
+        return (
+          <li key={l}>
+            <a href={href} target={external ? '_blank' : undefined} rel={external ? 'noopener noreferrer' : undefined}
+               style={{ fontFamily: a.font.sans, fontSize: 13, color: a.c.inkSoft, textDecoration: 'none' }}>{l}</a>
+          </li>
+        );
+      })}
     </ul>
   </div>
 );
