@@ -5,24 +5,42 @@ import clsx from 'clsx';
 import SidebarNav from './SidebarNav';
 import PageHeader from './PageHeader';
 import { HeaderActionsProvider } from './HeaderActions';
+import { useAgentDock } from './AgentDock';
 
 interface AppShellProps {
   userEmail: string;
   signOut?:  () => void;
 }
 
+const DEFAULT_CONTEXT = {
+  scope:       'All accounts · Last 30 days',
+  transcript:  [],
+};
+
+const DEFAULT_SUGGESTIONS = [
+  'What is my top spend driver?',
+  'Any anomalies this week?',
+  'Show savings opportunities',
+];
+
 export default function AppShell({ userEmail, signOut }: AppShellProps) {
-  const { pathname }               = useLocation();
+  const { pathname }                = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
+
+  const dock = useAgentDock({
+    context:     DEFAULT_CONTEXT,
+    suggestions: DEFAULT_SUGGESTIONS,
+    nudge:       null,
+  });
 
   return (
     /* HeaderActionsProvider wraps the whole shell so pages (inside Outlet)
        can inject actions that PageHeader reads via context. */
     <HeaderActionsProvider>
-      <div className="flex h-screen overflow-hidden bg-zinc-50 font-sans antialiased">
+      <div className="relative flex h-screen overflow-hidden bg-atlas-bg font-sans antialiased">
 
         {/* ── Desktop sidebar ───────────────────────────────────────── */}
-        <aside className="hidden w-56 shrink-0 border-r border-zinc-800/70 md:flex md:flex-col">
+        <aside className="hidden md:flex md:flex-col">
           <SidebarNav userEmail={userEmail} signOut={signOut} />
         </aside>
 
@@ -39,7 +57,7 @@ export default function AppShell({ userEmail, signOut }: AppShellProps) {
         {/* ── Mobile sidebar drawer ─────────────────────────────────── */}
         <aside
           className={clsx(
-            'fixed inset-y-0 left-0 z-50 w-60 transform border-r border-zinc-800 shadow-2xl transition-transform duration-200 ease-out md:hidden',
+            'fixed inset-y-0 left-0 z-50 transform shadow-2xl transition-transform duration-200 ease-out md:hidden',
             mobileOpen ? 'translate-x-0' : '-translate-x-full',
           )}
         >
@@ -51,12 +69,18 @@ export default function AppShell({ userEmail, signOut }: AppShellProps) {
         </aside>
 
         {/* ── Main content column ───────────────────────────────────── */}
-        <div className="flex min-w-0 flex-1 flex-col">
+        <div
+          className="flex min-w-0 flex-1 flex-col"
+          style={{
+            marginRight: dock.reservedWidth,
+            transition: 'margin-right 240ms cubic-bezier(0.2, 0.8, 0.2, 1)',
+          }}
+        >
 
           {/* Mobile top bar */}
           <div className="flex h-12 shrink-0 items-center justify-between border-b border-zinc-200/80 bg-white px-4 md:hidden">
             <div className="flex items-center gap-2">
-              <div className="flex h-6 w-6 items-center justify-center rounded bg-brand-600">
+              <div className="flex h-6 w-6 items-center justify-center rounded bg-atlas-brandAtlas">
                 <span className="text-[11px] font-bold text-white">K</span>
               </div>
               <span className="text-sm font-semibold text-zinc-900">KostOps</span>
@@ -64,7 +88,7 @@ export default function AppShell({ userEmail, signOut }: AppShellProps) {
             <button
               type="button"
               className="rounded-md p-2 text-zinc-500 hover:bg-zinc-100"
-              onClick={() => setMobileOpen(o => !o)}
+              onClick={() => setMobileOpen((o) => !o)}
               aria-expanded={mobileOpen}
               aria-label={mobileOpen ? 'Close menu' : 'Open menu'}
             >
@@ -72,8 +96,12 @@ export default function AppShell({ userEmail, signOut }: AppShellProps) {
             </button>
           </div>
 
-          {/* Page header — reads from HeaderActionsContext */}
-          <PageHeader pathname={pathname} />
+          {/* Page header — topbar + filter bar */}
+          <PageHeader
+            pathname={pathname}
+            userEmail={userEmail}
+            signOut={signOut}
+          />
 
           {/* Scrollable page content */}
           <main className="scrollbar-thin min-h-0 flex-1 overflow-y-auto">
@@ -83,6 +111,10 @@ export default function AppShell({ userEmail, signOut }: AppShellProps) {
           </main>
 
         </div>
+
+        {/* AgentDock — absolute inside relative root, floats right */}
+        {dock.node}
+
       </div>
     </HeaderActionsProvider>
   );

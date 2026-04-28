@@ -1,8 +1,7 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
-import { ChevronDown, LogOut } from 'lucide-react';
 import clsx from 'clsx';
-import { NAV_SECTIONS, sectionIdForPath } from '../../nav/config';
+import { NAV_SECTIONS } from '../../nav/config';
 import { useRole } from '../../auth/useRole';
 
 interface SidebarNavProps {
@@ -21,13 +20,9 @@ function initials(email: string): string {
 }
 
 export default function SidebarNav({ userEmail, signOut, onNavigate, className }: SidebarNavProps) {
-  const { pathname }   = useLocation();
-  const routeSection   = sectionIdForPath(pathname);
-  const [openSectionId, setOpenSectionId] = useState<string | null>(() => routeSection);
-  const { isAdmin }    = useRole();
+  const { pathname } = useLocation();
+  const { isAdmin }  = useRole();
 
-  // Viewers never see admin-only pages. Sections whose only children are
-  // admin-only are hidden as well so we don't render empty accordions.
   const visibleSections = useMemo(() => {
     return NAV_SECTIONS
       .map((s) => ({
@@ -37,155 +32,107 @@ export default function SidebarNav({ userEmail, signOut, onNavigate, className }
       .filter((s) => s.children.length > 0);
   }, [isAdmin]);
 
-  useEffect(() => {
-    if (routeSection) setOpenSectionId(routeSection);
-  }, [routeSection]);
-
-  function onSectionClick(id: string) {
-    setOpenSectionId(prev => {
-      const section        = visibleSections.find(s => s.id === id);
-      const hasActiveChild = section?.children.some(c => c.path === pathname) ?? false;
-      // Never collapse the section that contains the current page
-      if (prev === id && !hasActiveChild) return null;
-      return id;
-    });
-  }
-
   return (
-    <div className={clsx('flex h-full flex-col bg-zinc-950 text-zinc-300', className)}>
+    <div className={clsx('flex h-full w-56 shrink-0 flex-col bg-[#0e1525] text-[#cbd2dd]', className)}>
 
-      {/* ── Brand lockup ──────────────────────────────────────────────── */}
-      <div className="shrink-0 border-b border-white/[0.06] px-4 py-[1.0625rem]">
+      {/* ── Logo lockup ─────────────────────────────────────────────── */}
+      <div className="shrink-0 border-b border-white/[0.06] px-[18px] py-[14px]">
         <div className="flex items-center gap-2.5">
-          {/* "K" monogram */}
-          <div className="flex h-[1.875rem] w-[1.875rem] shrink-0 items-center justify-center rounded-[6px] bg-brand-600 shadow-sm">
-            <span className="text-[13px] font-bold leading-none tracking-tight text-white">K</span>
-          </div>
+          <svg width="30" height="30" viewBox="0 0 80 80" className="shrink-0">
+            <defs>
+              <linearGradient id="kg" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0%" stopColor="#0b66e4"/>
+                <stop offset="100%" stopColor="#137a7b"/>
+              </linearGradient>
+            </defs>
+            <rect width="80" height="80" rx="18" fill="url(#kg)"/>
+            <circle cx="40" cy="40" r="22" fill="none" stroke="#fff" strokeWidth="2" opacity="0.35"/>
+            <path d="M 40 18 L 46 40 L 40 36 L 34 40 Z" fill="#fff"/>
+            <path d="M 40 62 L 46 40 L 40 44 L 34 40 Z" fill="#fff" opacity="0.55"/>
+            <circle cx="40" cy="40" r="2.5" fill="#fff"/>
+          </svg>
           <div className="leading-none">
-            <p className="text-[13.5px] font-semibold tracking-tight text-white">KostOps</p>
-            <p className="mt-[3px] text-[0.625rem] font-medium text-zinc-500">FinOps Platform</p>
+            <p className="text-[14px] font-semibold tracking-tight text-white" style={{ letterSpacing: '-0.01em' }}>KostOps</p>
+            <p className="mt-[3px] text-[10.5px] text-[#7d8595]">FinOps Platform</p>
           </div>
         </div>
       </div>
 
-      {/* ── Primary navigation ────────────────────────────────────────── */}
-      <nav className="scrollbar-dark flex-1 overflow-y-auto overflow-x-hidden px-2 py-2.5">
-        <ul className="space-y-px">
-          {visibleSections.map(section => {
-            const Icon           = section.icon;
-            const isOpen         = openSectionId === section.id;
-            const hasActiveChild = section.children.some(c => c.path === pathname);
+      {/* ── Search bar ──────────────────────────────────────────────── */}
+      <div className="shrink-0 px-3 py-2.5">
+        <div className="flex items-center gap-2 rounded-md bg-white/[0.05] px-2.5 py-[7px] text-[12px] text-[#7d8595]">
+          <span className="text-[13px]">⌕</span>
+          <span className="flex-1">Search…</span>
+          <span className="rounded-[3px] bg-white/[0.06] px-[5px] py-[1px] text-[10px]">⌘K</span>
+        </div>
+      </div>
 
-            return (
-              <li key={section.id}>
-                {/* Thin separator before Admin */}
-                {section.id === 'admin' && (
-                  <div className="mx-3 mb-2 mt-1.5 h-px bg-white/[0.06]" aria-hidden="true" />
-                )}
+      {/* ── Nav sections (flat list) ─────────────────────────────────── */}
+      <nav className="flex-1 overflow-y-auto overflow-x-hidden px-2 pb-4">
+        {visibleSections.map((section) => (
+          <div key={section.id} className="mt-3.5">
+            {/* Section label as small-caps gray divider */}
+            <div className="px-3 py-1 text-[10.5px] font-medium uppercase tracking-[0.10em] text-[#7d8595]">
+              {section.label}
+            </div>
 
-                {/* Section toggle */}
-                <button
-                  type="button"
-                  onClick={() => onSectionClick(section.id)}
+            {/* Direct nav links — no accordion */}
+            {section.children.map((child) => {
+              const isActive    = pathname === child.path;
+              /* Findings badge: show "42" on optimization/opportunities */
+              const showBadge   = child.path === '/optimization/opportunities';
+
+              return (
+                <NavLink
+                  key={child.path}
+                  to={child.path}
+                  onClick={onNavigate}
                   className={clsx(
-                    'flex w-full items-center gap-2.5 rounded-lg px-3 py-[0.4375rem] text-left text-[13px] font-medium transition-colors duration-100',
-                    hasActiveChild
-                      ? 'bg-white/[0.07] text-white'
-                      : isOpen
-                        ? 'bg-white/[0.04] text-zinc-200'
-                        : 'text-zinc-400 hover:bg-white/[0.05] hover:text-zinc-200',
+                    'my-px flex items-center gap-2.5 rounded-md px-3 py-[7px] text-[13px] transition-colors duration-100',
+                    isActive
+                      ? 'bg-[rgba(11,102,228,0.18)] font-medium text-white'
+                      : 'font-normal text-[#cbd2dd] hover:bg-white/[0.05]',
                   )}
                 >
-                  <Icon
-                    size={15}
-                    strokeWidth={1.75}
+                  {/* Icon placeholder dot */}
+                  <span
                     className={clsx(
-                      'shrink-0 transition-colors',
-                      hasActiveChild
-                        ? 'text-brand-400'
-                        : isOpen
-                          ? 'text-zinc-400'
-                          : 'text-zinc-500',
+                      'h-[5px] w-[5px] shrink-0 rounded-full',
+                      isActive ? 'bg-[#7eb1ff]' : 'bg-[#7d8595]',
                     )}
+                    aria-hidden="true"
                   />
-                  <span className="min-w-0 flex-1 truncate">{section.label}</span>
-                  <ChevronDown
-                    size={13}
-                    strokeWidth={2.25}
-                    className={clsx(
-                      'shrink-0 text-zinc-600 transition-transform duration-200',
-                      isOpen && 'rotate-180',
-                    )}
-                  />
-                </button>
-
-                {/* Children — CSS grid collapse trick */}
-                <div
-                  className={clsx(
-                    'grid transition-[grid-template-rows] duration-200 ease-out',
-                    isOpen ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]',
+                  <span className="flex-1 truncate">{child.label}</span>
+                  {showBadge && (
+                    <span className="rounded-full bg-[rgba(196,103,27,0.20)] px-[6px] py-[1px] text-[10px] font-semibold text-[#f0b076]">
+                      42
+                    </span>
                   )}
-                >
-                  <div className="overflow-hidden">
-                    <ul className="relative space-y-px py-1 pl-[0.3125rem]">
-                      {/* Vertical guide rail */}
-                      <div
-                        className="pointer-events-none absolute bottom-1 left-[1.3125rem] top-1 w-px bg-white/[0.07]"
-                        aria-hidden="true"
-                      />
-
-                      {section.children.map(child => {
-                        const isActive = pathname === child.path;
-                        return (
-                          <li key={child.path} className="relative">
-                            {/* Active dot — sits on the guide rail */}
-                            {isActive && (
-                              <span
-                                className="pointer-events-none absolute left-[1.0625rem] top-1/2 h-[5px] w-[5px] -translate-y-1/2 rounded-full bg-brand-400"
-                                aria-hidden="true"
-                              />
-                            )}
-                            <NavLink
-                              to={child.path}
-                              onClick={onNavigate}
-                              className={clsx(
-                                'block rounded-md py-[0.3125rem] pl-9 pr-3 text-[12.5px] font-medium transition-colors duration-100',
-                                isActive
-                                  ? 'bg-white/[0.07] text-zinc-100'
-                                  : 'text-zinc-500 hover:bg-white/[0.04] hover:text-zinc-300',
-                              )}
-                            >
-                              {child.label}
-                            </NavLink>
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  </div>
-                </div>
-              </li>
-            );
-          })}
-        </ul>
+                </NavLink>
+              );
+            })}
+          </div>
+        ))}
       </nav>
 
-      {/* ── User footer ───────────────────────────────────────────────── */}
-      <div className="shrink-0 border-t border-white/[0.06] p-2">
-        <div className="flex items-center gap-2.5 rounded-lg px-2 py-[0.4375rem]">
-          {/* Avatar circle */}
-          <div className="flex h-[1.625rem] w-[1.625rem] shrink-0 items-center justify-center rounded-full bg-zinc-700 text-[10px] font-semibold text-zinc-200">
-            {initials(userEmail)}
-          </div>
-          <p className="min-w-0 flex-1 truncate text-[12px] font-medium text-zinc-400">
-            {userEmail}
-          </p>
+      {/* ── Footer ──────────────────────────────────────────────────── */}
+      <div className="shrink-0 border-t border-white/[0.06] px-3.5 py-2.5">
+        <div className="flex items-center justify-between text-[11px] text-[#7d8595]">
+          {/* CUR live indicator + version */}
+          <span className="flex items-center gap-1.5">
+            <span className="h-[7px] w-[7px] rounded-full bg-[#3fce7a]" aria-hidden="true" />
+            CUR live
+          </span>
+          <span>v1.4.2</span>
+
+          {/* User avatar */}
           <button
             type="button"
             onClick={signOut}
-            title="Sign out"
-            className="shrink-0 rounded-md p-1.5 text-zinc-600 transition-colors hover:bg-white/[0.06] hover:text-zinc-300"
+            title={`Sign out (${userEmail})`}
+            className="ml-2 flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-full bg-[#7d8595]/40 text-[10px] font-semibold text-white transition-colors hover:bg-[#7d8595]/60"
           >
-            <LogOut size={13.5} strokeWidth={1.75} />
+            {initials(userEmail)}
           </button>
         </div>
       </div>

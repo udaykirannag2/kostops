@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" fill="none">
+  <defs>
+    <!-- Background gradient: sky-blue top-left → deep blue bottom-right -->
+    <linearGradient id="bg" x1="0" y1="0" x2="200" y2="200" gradientUnits="userSpaceOnUse">
+      <stop offset="0%"   stop-color="#38bdf8"/>
+      <stop offset="100%" stop-color="#1e40af"/>
+    </linearGradient>
+    <!-- Upper needle: bright white at tip, slightly translucent at base -->
+    <linearGradient id="needleUp" x1="100" y1="22" x2="100" y2="102" gradientUnits="userSpaceOnUse">
+      <stop offset="0%"   stop-color="#ffffff"/>
+      <stop offset="100%" stop-color="#bae6fd" stop-opacity="0.85"/>
+    </linearGradient>
+    <!-- Lower needle: lighter / translucent -->
+    <linearGradient id="needleDown" x1="100" y1="102" x2="100" y2="178" gradientUnits="userSpaceOnUse">
+      <stop offset="0%"   stop-color="#bae6fd" stop-opacity="0.85"/>
+      <stop offset="100%" stop-color="#7dd3fc" stop-opacity="0.55"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Rounded-square background -->
+  <rect width="200" height="200" rx="44" fill="url(#bg)"/>
+
+  <!-- Orbit ring (centred at 105, 105 to sit slightly below-centre) -->
+  <circle cx="100" cy="108" r="54"
+          stroke="rgba(255,255,255,0.28)" stroke-width="4" fill="none"/>
+
+  <!-- Upper needle (kite pointing up) -->
+  <path d="M100 22 L88 100 L100 106 L112 100 Z" fill="url(#needleUp)"/>
+
+  <!-- Lower needle (shorter kite pointing down) -->
+  <path d="M100 190 L89 116 L100 110 L111 116 Z" fill="url(#needleDown)"/>
+
+  <!-- Centre eye — white ring + blue pupil -->
+  <circle cx="100" cy="108" r="13" fill="white"/>
+  <circle cx="100" cy="108" r="5.5" fill="#2563eb"/>
+</svg>
