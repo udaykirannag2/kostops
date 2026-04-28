@@ -38,18 +38,25 @@ export default function SidebarNav({ userEmail, signOut, onNavigate, className }
       {/* ── Logo lockup ─────────────────────────────────────────────── */}
       <div className="shrink-0 border-b border-white/[0.06] px-[18px] py-[14px]">
         <div className="flex items-center gap-2.5">
-          <svg width="30" height="30" viewBox="0 0 80 80" className="shrink-0">
+          {/* KostOps logo — compass/eye on sky-blue → deep-blue gradient */}
+          <svg width="30" height="30" viewBox="0 0 80 80" className="shrink-0" aria-hidden="true">
             <defs>
-              <linearGradient id="kg" x1="0" y1="0" x2="1" y2="1">
-                <stop offset="0%" stopColor="#0b66e4"/>
-                <stop offset="100%" stopColor="#137a7b"/>
+              <linearGradient id="kostops-bg" x1="0" y1="0" x2="80" y2="80" gradientUnits="userSpaceOnUse">
+                <stop offset="0%"   stopColor="#38bdf8"/>
+                <stop offset="100%" stopColor="#1e40af"/>
               </linearGradient>
             </defs>
-            <rect width="80" height="80" rx="18" fill="url(#kg)"/>
-            <circle cx="40" cy="40" r="22" fill="none" stroke="#fff" strokeWidth="2" opacity="0.35"/>
-            <path d="M 40 18 L 46 40 L 40 36 L 34 40 Z" fill="#fff"/>
-            <path d="M 40 62 L 46 40 L 40 44 L 34 40 Z" fill="#fff" opacity="0.55"/>
-            <circle cx="40" cy="40" r="2.5" fill="#fff"/>
+            {/* Rounded-square background */}
+            <rect width="80" height="80" rx="18" fill="url(#kostops-bg)"/>
+            {/* Orbit ring — centred slightly below mid */}
+            <circle cx="40" cy="43" r="21" fill="none" stroke="rgba(255,255,255,0.28)" strokeWidth="1.8"/>
+            {/* Upper needle — bright white kite */}
+            <path d="M40 9 L35 41 L40 43.5 L45 41 Z" fill="white"/>
+            {/* Lower needle — shorter, translucent */}
+            <path d="M40 76 L35.5 46 L40 43.5 L44.5 46 Z" fill="rgba(186,230,253,0.72)"/>
+            {/* Centre eye */}
+            <circle cx="40" cy="43" r="5.5" fill="white"/>
+            <circle cx="40" cy="43" r="2.2" fill="#2563eb"/>
           </svg>
           <div className="leading-none">
             <p className="text-[14px] font-semibold tracking-tight text-white" style={{ letterSpacing: '-0.01em' }}>KostOps</p>
