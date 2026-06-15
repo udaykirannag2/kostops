@@ -35,7 +35,7 @@ Ask a question in chat       Slack: "Approve rightsizing?"      Cloud resource r
 | Recommendations nobody acts on | Slack-native approval → one click to approve a fix |
 | No way to measure FinOps maturity | FMI: a single 0–100 number per team |
 | Month-end spreadsheet for leadership | Auto-generated QBR scorecard from live data |
-| Siloed cost data per cloud account | Single normalized schema, queryable by BU / product / env |
+| Siloed cost data per cloud account | FOCUS v1.2 normalized schema — single standard across all providers |
 
 ---
 
@@ -45,8 +45,8 @@ Ask a question in chat       Slack: "Approve rightsizing?"      Cloud resource r
 graph TB
     subgraph Sources["☁️ Data Sources"]
         A1[AWS CUR] 
-        A2[Azure Cost Mgmt]
-        A3[GCP BigQuery]
+        A2["Azure Cost Mgmt export<br/>(FOCUS native → Blob → S3)"]
+        A3["GCP BigQuery billing<br/>(Detailed export → S3)"]
         A4[Snowflake]
         A5[Databricks]
         A6[MongoDB Atlas]
@@ -54,7 +54,7 @@ graph TB
     end
 
     subgraph Normalize["🔄 Normalization Layer"]
-        B[Glue ETL → Common Schema<br/>cost_usd · BU · resource_id · tags]
+        B["FOCUS v1.2 normalization<br/>EffectiveCost · ServiceCategory · ResourceId · Tags · CommitmentDiscountStatus"]
     end
 
     subgraph Intelligence["🤖 AI Intelligence Layer"]
@@ -132,13 +132,15 @@ COIN = Optimization Opportunities ($) ÷ Total Amortized Spend ($)
 
 
 
+## Documentation
+
 | Document | Description |
 |---|---|
-| [Architecture — Level 300](docs/ARCHITECTURE.md) | Full technical architecture: all 7 connectors, normalization schema, AI agents, API layer, UI spec |
+| [Architecture — Level 300](docs/ARCHITECTURE.md) | Full technical architecture: FOCUS normalization, file-based connectors, AI agents, API layer, 6 ADRs |
+| [Multi-Cloud Connectors](docs/CONNECTORS.md) | AWS CUR 2.0, Azure FOCUS export, GCP BigQuery, Snowflake, Databricks — setup, SQL, and FOCUS mapping |
 | [User Flow: Ask → Remediate](docs/USER_FLOW.md) | Step-by-step: from a user question to a cloud resource being fixed and savings recorded |
 | [OpenOps Integration](docs/OPENOPS.md) | Workflow automation engine: templates, Slack approvals, remediation patterns |
-| [FMI — FinOps Maturity Index](docs/FMI.md) | KostOps original 0–100 maturity score per BU, team, and cloud — and how it differs from Apptio COIN |
-| [Multi-Cloud Connectors](docs/CONNECTORS.md) | AWS, Azure, GCP, Snowflake, Databricks, MongoDB, Datacenter connector specs |
+| [FMI — FinOps Maturity Index](docs/FMI.md) | KostOps original 0–100 maturity score — and how it differs from Apptio COIN |
 | [Deployment Guide](docs/DEPLOYMENT.md) | How to deploy KostOps in your AWS account |
 
 ---
@@ -159,15 +161,15 @@ See [Deployment Guide](docs/DEPLOYMENT.md) for full setup including multi-accoun
 
 ## Supported Platforms
 
-| Platform | Billing Source | Optimization Signals |
-|---|---|---|
-| ✅ AWS | Cost and Usage Report (CUR) | EC2 rightsizing, EBS idle, RI/SP opportunity, Compute Optimizer |
-| ✅ Azure | Cost Management API | VM rightsizing, Azure Advisor recommendations |
-| ✅ GCP | BigQuery billing export | Committed use, idle VM, Recommender API |
-| ✅ Snowflake | ACCOUNT_USAGE schema | Idle warehouses, expensive queries, warehouse sizing |
-| ✅ Databricks | Usage API | No-terminate clusters, on-demand vs spot |
-| ✅ MongoDB Atlas | Invoices API | Cluster tier rightsizing |
-| ✅ Datacenter | CMDB / chargeback API | On-prem vs cloud cost comparison |
+| Platform | Billing source | Mechanism | FOCUS native? |
+|---|---|---|---|
+| ✅ AWS | Cost and Usage Report (CUR 2.0) | Parquet pushed to S3 — Glue Crawler reads | ✅ Native FOCUS export available |
+| ✅ Azure | Cost Management export | FOCUS CSV pushed to Blob Storage → copied to S3 | ✅ Native FOCUS export |
+| ✅ GCP | BigQuery detailed billing export | BigQuery Storage API → S3 (no API polling) | 🔄 FOCUS converter |
+| ✅ Snowflake | ACCOUNT_USAGE schema | MCP (real-time) + scheduled SQL export (batch) | 🔄 Manual mapping |
+| ✅ Databricks | system.billing tables | MCP (real-time) + Delta export (batch) | 🔄 Manual mapping |
+| ✅ MongoDB Atlas | Invoices API | Scheduled Lambda pull | ❌ Custom mapping |
+| ✅ Datacenter | CMDB / chargeback | ServiceNow agent | ❌ Custom mapping |
 
 ---
 
