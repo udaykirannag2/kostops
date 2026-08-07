@@ -7,6 +7,8 @@
 [![OpenOps](https://img.shields.io/badge/Automation-OpenOps-green)](https://openops.com)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow)](LICENSE)
 
+🚀 **Live Demo**: [https://d2mth6oqewcm06.cloudfront.net](https://d2mth6oqewcm06.cloudfront.net)
+
 ---
 
 ## What is KostOps?
